@@ -46,6 +46,9 @@ uuid = "1.16.0"
 openh264 = "0.8.1"
 rusty-duplication = "0.6.1"
 rayon = "1.10.0"
+crossbeam = "0.8.4"
+dashmap = "6.1.0"
+crossbeam-channel = "0.5.15"
 # 方便编译时使用环境变量
 #[build-dependencies]
 #pkg-config = "0.3"
