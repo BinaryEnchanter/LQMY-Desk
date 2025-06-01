@@ -1,389 +1,437 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use tokio::sync::{broadcast, mpsc};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    mpsc, Arc, Mutex,
+};
+use std::thread;
 use webrtc::media::Sample;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use windows::core::*;
+use windows::Win32::Foundation::*;
 use windows::Win32::Media::Audio::*;
 use windows::Win32::System::Com::*;
 
-// 音频配置
 const SAMPLE_RATE: u32 = 48000;
-const CHANNELS: u16 = 2;
-const BITS_PER_SAMPLE: u16 = 16;
-const BUFFER_SIZE: usize = 1920; // 40ms at 48kHz
+const BUFFER_SIZE: usize = 1920; // 40ms
 
 #[derive(Clone)]
-pub struct AudioSample {
-    pub data: Vec<i16>,
+pub struct AudioData {
+    pub mic: Vec<i16>,
+    pub system: Vec<i16>,
     pub timestamp: u64,
 }
 
 pub struct AudioMixer {
-    microphone_volume: f32,
+    mic_volume: f32,
     system_volume: f32,
 }
 
 impl AudioMixer {
     pub fn new() -> Self {
         Self {
-            microphone_volume: 1.0,
+            mic_volume: 1.0,
             system_volume: 1.0,
         }
     }
 
-    pub fn mix_audio(&self, mic_data: &[i16], system_data: &[i16]) -> Vec<i16> {
-        let len = mic_data.len().max(system_data.len());
-        let mut mixed = Vec::with_capacity(len);
+    pub fn mix(&self, mic: &[i16], system: &[i16]) -> Vec<i16> {
+        let len = mic.len().max(system.len());
+        let mut result = Vec::with_capacity(len);
 
         for i in 0..len {
-            let mic_sample = if i < mic_data.len() {
-                (mic_data[i] as f32 * self.microphone_volume) as i32
+            let m = if i < mic.len() {
+                mic[i] as f32 * self.mic_volume
             } else {
-                0
+                0.0
             };
-
-            let system_sample = if i < system_data.len() {
-                (system_data[i] as f32 * self.system_volume) as i32
+            let s = if i < system.len() {
+                system[i] as f32 * self.system_volume
             } else {
-                0
+                0.0
             };
-
-            // 混音并防止溢出
-            let mixed_sample = (mic_sample + system_sample).clamp(-32768, 32767);
-            mixed.push(mixed_sample as i16);
+            result.push((m + s).clamp(-32768.0, 32767.0) as i16);
         }
-
-        mixed
+        result
     }
 
-    pub fn set_microphone_volume(&mut self, volume: f32) {
-        self.microphone_volume = volume.clamp(0.0, 2.0);
+    pub fn set_mic_volume(&mut self, vol: f32) {
+        self.mic_volume = vol.clamp(0.0, 2.0);
     }
-
-    pub fn set_system_volume(&mut self, volume: f32) {
-        self.system_volume = volume.clamp(0.0, 2.0);
+    pub fn set_system_volume(&mut self, vol: f32) {
+        self.system_volume = vol.clamp(0.0, 2.0);
     }
 }
 
-pub struct WindowsAudioCapture {
-    mic_client: Option<IAudioClient>,
-    system_client: Option<IAudioClient>,
-    mic_render_client: Option<IAudioRenderClient>,
-    system_render_client: Option<IAudioRenderClient>,
+// 音频捕获线程
+fn audio_capture_thread(
+    sender: mpsc::Sender<AudioData>,
+    running: Arc<AtomicBool>,
+) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    unsafe {
+        CoInitializeEx(None, COINIT_MULTITHREADED).ok();
+
+        let enumerator: IMMDeviceEnumerator =
+            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
+
+        // 麦克风
+        let mic_device = enumerator.GetDefaultAudioEndpoint(eCapture, eConsole)?;
+        let mic_client: IAudioClient = mic_device.Activate(CLSCTX_ALL, None)?;
+        let mic_format = mic_client.GetMixFormat()?;
+        mic_client.Initialize(AUDCLNT_SHAREMODE_SHARED, 0, 10000000, 0, mic_format, None)?;
+        let mic_capture: IAudioCaptureClient = mic_client.GetService()?;
+
+        // 系统音频
+        let sys_device = enumerator.GetDefaultAudioEndpoint(eRender, eConsole)?;
+        let sys_client: IAudioClient = sys_device.Activate(CLSCTX_ALL, None)?;
+        let sys_format = sys_client.GetMixFormat()?;
+        sys_client.Initialize(
+            AUDCLNT_SHAREMODE_SHARED,
+            AUDCLNT_STREAMFLAGS_LOOPBACK,
+            10000000,
+            0,
+            sys_format,
+            None,
+        )?;
+        let sys_capture: IAudioCaptureClient = sys_client.GetService()?;
+
+        let mut timestamp = 0u64;
+        let mut capture_started = false;
+
+        while running.load(Ordering::Relaxed) {
+            thread::sleep(std::time::Duration::from_millis(20));
+
+            // 延迟启动音频流直到需要时
+            if !capture_started {
+                mic_client.Start()?;
+                sys_client.Start()?;
+                capture_started = true;
+            }
+
+            let mut mic_data = Vec::new();
+            let mut sys_data = Vec::new();
+
+            // 捕获麦克风
+            if let Ok(packet_len) = mic_capture.GetNextPacketSize() {
+                if packet_len > 0 {
+                    let mut buffer = std::ptr::null_mut();
+                    let mut frames = 0u32;
+                    let mut flags = 0u32;
+
+                    if mic_capture
+                        .GetBuffer(&mut buffer, &mut frames, &mut flags, None, None)
+                        .is_ok()
+                    {
+                        let data =
+                            std::slice::from_raw_parts(buffer as *const i16, frames as usize * 2);
+                        mic_data.extend_from_slice(data);
+                        mic_capture.ReleaseBuffer(frames).ok();
+                    }
+                }
+            }
+
+            // 捕获系统音频
+            if let Ok(packet_len) = sys_capture.GetNextPacketSize() {
+                if packet_len > 0 {
+                    let mut buffer = std::ptr::null_mut();
+                    let mut frames = 0u32;
+                    let mut flags = 0u32;
+
+                    if sys_capture
+                        .GetBuffer(&mut buffer, &mut frames, &mut flags, None, None)
+                        .is_ok()
+                    {
+                        let data =
+                            std::slice::from_raw_parts(buffer as *const i16, frames as usize * 2);
+                        sys_data.extend_from_slice(data);
+                        sys_capture.ReleaseBuffer(frames).ok();
+                    }
+                }
+            }
+
+            // 发送数据
+            if !mic_data.is_empty() || !sys_data.is_empty() {
+                let audio = AudioData {
+                    mic: mic_data,
+                    system: sys_data,
+                    timestamp,
+                };
+                if sender.send(audio).is_err() {
+                    break;
+                }
+                timestamp += 20;
+            }
+        }
+
+        // 停止音频流
+        if capture_started {
+            mic_client.Stop().ok();
+            sys_client.Stop().ok();
+        }
+    }
+    Ok(())
 }
 
-impl WindowsAudioCapture {
-    pub fn new() -> Result<Self> {
-        unsafe {
-            CoInitializeEx(None, COINIT_MULTITHREADED)?;
-        }
-
-        Ok(Self {
-            mic_client: None,
-            system_client: None,
-            mic_render_client: None,
-            system_render_client: None,
-        })
-    }
-
-    pub fn initialize_microphone(&mut self) -> Result<()> {
-        unsafe {
-            let enumerator: IMMDeviceEnumerator =
-                CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
-            let device = enumerator.GetDefaultAudioEndpoint(eCapture, eConsole)?;
-            let audio_client: IAudioClient = device.Activate(CLSCTX_ALL, None)?;
-
-            let mut wave_format = WAVEFORMATEX {
-                wFormatTag: WAVE_FORMAT_PCM as u16,
-                nChannels: CHANNELS,
-                nSamplesPerSec: SAMPLE_RATE,
-                nAvgBytesPerSec: SAMPLE_RATE * (CHANNELS as u32) * (BITS_PER_SAMPLE as u32) / 8,
-                nBlockAlign: (CHANNELS * BITS_PER_SAMPLE) / 8,
-                wBitsPerSample: BITS_PER_SAMPLE,
-                cbSize: 0,
-            };
-
-            audio_client.Initialize(
-                AUDCLNT_SHAREMODE_SHARED,
-                AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
-                10000000, // 1 second buffer
-                0,
-                &wave_format,
-                None,
-            )?;
-
-            let render_client: IAudioRenderClient = audio_client.GetService()?;
-
-            self.mic_client = Some(audio_client);
-            self.mic_render_client = Some(render_client);
-        }
-
-        Ok(())
-    }
-
-    pub fn initialize_system_audio(&mut self) -> Result<()> {
-        unsafe {
-            let enumerator: IMMDeviceEnumerator =
-                CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
-            let device = enumerator.GetDefaultAudioEndpoint(eRender, eConsole)?;
-            let audio_client: IAudioClient = device.Activate(CLSCTX_ALL, None)?;
-
-            let mut wave_format = WAVEFORMATEX {
-                wFormatTag: WAVE_FORMAT_PCM as u16,
-                nChannels: CHANNELS,
-                nSamplesPerSec: SAMPLE_RATE,
-                nAvgBytesPerSec: SAMPLE_RATE * (CHANNELS as u32) * (BITS_PER_SAMPLE as u32) / 8,
-                nBlockAlign: (CHANNELS * BITS_PER_SAMPLE) / 8,
-                wBitsPerSample: BITS_PER_SAMPLE,
-                cbSize: 0,
-            };
-
-            audio_client.Initialize(
-                AUDCLNT_SHAREMODE_SHARED,
-                AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
-                10000000,
-                0,
-                &wave_format,
-                None,
-            )?;
-
-            let render_client: IAudioRenderClient = audio_client.GetService()?;
-
-            self.system_client = Some(audio_client);
-            self.system_render_client = Some(render_client);
-        }
-
-        Ok(())
-    }
-
-    pub fn capture_microphone_audio(&self) -> Result<Vec<i16>> {
-        // 实现麦克风音频捕获逻辑
-        // 这里需要调用Windows Audio API获取麦克风数据
-        Ok(vec![0; BUFFER_SIZE])
-    }
-
-    pub fn capture_system_audio(&self) -> Result<Vec<i16>> {
-        // 实现系统音频捕获逻辑（扬声器输出）
-        // 使用WASAPI loopback模式
-        Ok(vec![0; BUFFER_SIZE])
-    }
-}
-
-pub struct PeerAudioController {
-    volume: Arc<Mutex<f32>>,
-    audio_sender: mpsc::UnboundedSender<AudioSample>,
-}
-
-impl PeerAudioController {
-    pub fn new(audio_sender: mpsc::UnboundedSender<AudioSample>) -> Self {
-        Self {
-            volume: Arc::new(Mutex::new(1.0)),
-            audio_sender,
-        }
-    }
-
-    pub fn set_volume(&self, volume: f32) {
-        if let Ok(mut vol) = self.volume.lock() {
-            *vol = volume.clamp(0.0, 2.0);
-        }
-    }
-
-    pub fn get_volume(&self) -> f32 {
-        self.volume
-            .lock()
-            .unwrap_or_else(|_| std::sync::MutexGuard::new(1.0.into()))
-    }
-
-    pub fn process_received_audio(&self, mut sample: AudioSample) {
-        let volume = self.get_volume();
-        for sample_data in &mut sample.data {
-            *sample_data = (*sample_data as f32 * volume).clamp(-32768.0, 32767.0) as i16;
-        }
-        let _ = self.audio_sender.send(sample);
-    }
+struct TrackInfo {
+    track: Arc<TrackLocalStaticSample>,
+    active: AtomicBool,
 }
 
 pub struct WebRTCAudioSystem {
     mixer: Arc<Mutex<AudioMixer>>,
-    audio_capture: Arc<Mutex<WindowsAudioCapture>>,
-    peer_controllers: Arc<Mutex<HashMap<String, PeerAudioController>>>,
-    mixed_audio_sender: broadcast::Sender<AudioSample>,
-    rtc_tracks: Arc<Mutex<Vec<Arc<TrackLocalStaticSample>>>>,
+    tracks: Arc<Mutex<HashMap<String, TrackInfo>>>,
+    peer_volumes: Arc<Mutex<HashMap<String, f32>>>,
+    capture_running: Arc<AtomicBool>,
+    processing_running: Arc<AtomicBool>,
+    _capture_handle: Option<thread::JoinHandle<()>>,
+    _processing_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl WebRTCAudioSystem {
-    pub fn new() -> Result<Self> {
-        let audio_capture = WindowsAudioCapture::new()?;
-        let (mixed_audio_sender, _) = broadcast::channel(100);
+    pub fn new() -> Self {
+        let mixer = Arc::new(Mutex::new(AudioMixer::new()));
+        let tracks = Arc::new(Mutex::new(HashMap::new()));
+        let peer_volumes = Arc::new(Mutex::new(HashMap::new()));
+        let capture_running = Arc::new(AtomicBool::new(false));
+        let processing_running = Arc::new(AtomicBool::new(false));
 
-        Ok(Self {
-            mixer: Arc::new(Mutex::new(AudioMixer::new())),
-            audio_capture: Arc::new(Mutex::new(audio_capture)),
-            peer_controllers: Arc::new(Mutex::new(HashMap::new())),
-            mixed_audio_sender,
-            rtc_tracks: Arc::new(Mutex::new(Vec::new())),
-        })
+        Self {
+            mixer,
+            tracks,
+            peer_volumes,
+            capture_running,
+            processing_running,
+            _capture_handle: None,
+            _processing_handle: None,
+        }
     }
 
-    pub async fn initialize(&self) -> Result<()> {
-        let mut capture = self.audio_capture.lock().unwrap();
-        capture.initialize_microphone()?;
-        capture.initialize_system_audio()?;
+    /// 启动音频捕获和处理
+    pub fn start_capture(&mut self) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        if self.capture_running.load(Ordering::Relaxed) {
+            return Ok(()); // 已经启动
+        }
+
+        let (tx, rx) = mpsc::channel::<AudioData>();
+
+        // 启动音频捕获线程
+        let capture_running = Arc::clone(&self.capture_running);
+        capture_running.store(true, Ordering::Relaxed);
+
+        let capture_running_clone = Arc::clone(&capture_running);
+        let capture_handle = thread::spawn(move || {
+            if let Err(e) = audio_capture_thread(tx, capture_running_clone) {
+                eprintln!("Audio capture error: {}", e);
+            }
+        });
+
+        // 启动音频处理任务
+        let processing_running = Arc::clone(&self.processing_running);
+        processing_running.store(true, Ordering::Relaxed);
+
+        let mixer_clone = Arc::clone(&self.mixer);
+        let tracks_clone = Arc::clone(&self.tracks);
+        let processing_running_clone = Arc::clone(&processing_running);
+
+        let processing_handle = tokio::spawn(async move {
+            while processing_running_clone.load(Ordering::Relaxed) {
+                if let Ok(audio) = rx.recv() {
+                    // 混音
+                    let mixed = if let Ok(m) = mixer_clone.lock() {
+                        m.mix(&audio.mic, &audio.system)
+                    } else {
+                        continue;
+                    };
+
+                    // 收集活跃的tracks，避免跨await持有锁
+                    let active_tracks = if let Ok(tracks_guard) = tracks_clone.lock() {
+                        tracks_guard
+                            .values()
+                            .filter(|info| info.active.load(Ordering::Relaxed))
+                            .map(|info| Arc::clone(&info.track))
+                            .collect::<Vec<_>>()
+                    } else {
+                        continue;
+                    };
+
+                    // 释放锁后再发送数据
+                    if !active_tracks.is_empty() {
+                        let sample_data = mixed.iter().flat_map(|&x| x.to_le_bytes()).collect();
+                        let sample = Sample {
+                            data: sample_data,
+                            duration: std::time::Duration::from_millis(20),
+                            ..Default::default()
+                        };
+
+                        for track in active_tracks {
+                            let _ = track.write_sample(&sample).await;
+                        }
+                    }
+                } else {
+                    break; // 通道关闭
+                }
+            }
+        });
+
+        self._capture_handle = Some(capture_handle);
+        self._processing_handle = Some(processing_handle);
+
         Ok(())
     }
 
-    pub fn add_rtc_track(&self, track: Arc<TrackLocalStaticSample>) {
-        if let Ok(mut tracks) = self.rtc_tracks.lock() {
-            tracks.push(track);
+    /// 停止音频捕获
+    pub fn stop_capture(&mut self) {
+        self.capture_running.store(false, Ordering::Relaxed);
+        self.processing_running.store(false, Ordering::Relaxed);
+
+        if let Some(handle) = self._processing_handle.take() {
+            handle.abort();
+        }
+
+        if let Some(handle) = self._capture_handle.take() {
+            let _ = handle.join();
         }
     }
 
-    pub fn add_peer(&self, peer_id: String) -> mpsc::UnboundedReceiver<AudioSample> {
-        let (sender, receiver) = mpsc::unbounded_channel();
-        let controller = PeerAudioController::new(sender);
-
-        if let Ok(mut peers) = self.peer_controllers.lock() {
-            peers.insert(peer_id, controller);
+    /// 添加track
+    pub fn add_track(&self, uuid: String, track: Arc<TrackLocalStaticSample>) {
+        if let Ok(mut tracks) = self.tracks.lock() {
+            tracks.insert(
+                uuid,
+                TrackInfo {
+                    track,
+                    active: AtomicBool::new(true),
+                },
+            );
         }
-
-        receiver
     }
 
-    pub fn set_peer_volume(&self, peer_id: &str, volume: f32) {
-        if let Ok(peers) = self.peer_controllers.lock() {
-            if let Some(controller) = peers.get(peer_id) {
-                controller.set_volume(volume);
+    /// 移除track
+    pub fn remove_track(&self, uuid: &str) -> bool {
+        if let Ok(mut tracks) = self.tracks.lock() {
+            tracks.remove(uuid).is_some()
+        } else {
+            false
+        }
+    }
+
+    /// 启用/禁用指定track的写入
+    pub fn set_track_active(&self, uuid: &str, active: bool) -> bool {
+        if let Ok(tracks) = self.tracks.lock() {
+            if let Some(track_info) = tracks.get(uuid) {
+                track_info.active.store(active, Ordering::Relaxed);
+                return true;
             }
         }
+        false
     }
 
-    pub fn set_microphone_volume(&self, volume: f32) {
-        if let Ok(mut mixer) = self.mixer.lock() {
-            mixer.set_microphone_volume(volume);
+    /// 检查track是否存在且活跃
+    pub fn is_track_active(&self, uuid: &str) -> bool {
+        if let Ok(tracks) = self.tracks.lock() {
+            tracks
+                .get(uuid)
+                .map(|info| info.active.load(Ordering::Relaxed))
+                .unwrap_or(false)
+        } else {
+            false
         }
     }
 
-    pub fn set_system_audio_volume(&self, volume: f32) {
+    /// 获取活跃track数量
+    pub fn active_track_count(&self) -> usize {
+        if let Ok(tracks) = self.tracks.lock() {
+            tracks
+                .values()
+                .filter(|info| info.active.load(Ordering::Relaxed))
+                .count()
+        } else {
+            0
+        }
+    }
+
+    pub fn set_mic_volume(&self, volume: f32) {
+        if let Ok(mut mixer) = self.mixer.lock() {
+            mixer.set_mic_volume(volume);
+        }
+    }
+
+    pub fn set_system_volume(&self, volume: f32) {
         if let Ok(mut mixer) = self.mixer.lock() {
             mixer.set_system_volume(volume);
         }
     }
 
-    // 音频捕获和处理的主循环，运行在独立线程
-    pub async fn start_audio_thread(&self) {
-        let mixer = Arc::clone(&self.mixer);
-        let audio_capture = Arc::clone(&self.audio_capture);
-        let mixed_audio_sender = self.mixed_audio_sender.clone();
-        let rtc_tracks = Arc::clone(&self.rtc_tracks);
-
-        tokio::spawn(async move {
-            let mut timestamp = 0u64;
-
-            loop {
-                // 捕获麦克风音频
-                let mic_data = if let Ok(capture) = audio_capture.lock() {
-                    capture
-                        .capture_microphone_audio()
-                        .unwrap_or_else(|_| vec![0; BUFFER_SIZE])
-                } else {
-                    vec![0; BUFFER_SIZE]
-                };
-
-                // 捕获系统音频
-                let system_data = if let Ok(capture) = audio_capture.lock() {
-                    capture
-                        .capture_system_audio()
-                        .unwrap_or_else(|_| vec![0; BUFFER_SIZE])
-                } else {
-                    vec![0; BUFFER_SIZE]
-                };
-
-                // 混音
-                let mixed_data = if let Ok(mixer_guard) = mixer.lock() {
-                    mixer_guard.mix_audio(&mic_data, &system_data)
-                } else {
-                    mic_data
-                };
-
-                let audio_sample = AudioSample {
-                    data: mixed_data.clone(),
-                    timestamp,
-                };
-
-                // 发送到所有RTC连接
-                if let Ok(tracks) = rtc_tracks.lock() {
-                    for track in tracks.iter() {
-                        let sample = Sample {
-                            data: mixed_data.iter().flat_map(|&x| x.to_le_bytes()).collect(),
-                            duration: std::time::Duration::from_millis(40), // 40ms per buffer
-                            ..Default::default()
-                        };
-
-                        let _ = track.write_sample(&sample).await;
-                    }
-                }
-
-                // 广播混音后的音频
-                let _ = mixed_audio_sender.send(audio_sample);
-
-                timestamp += 40; // 40ms increment
-                tokio::time::sleep(std::time::Duration::from_millis(40)).await;
-            }
-        });
-    }
-
-    // 处理接收到的对方音频
-    pub fn handle_received_audio(&self, peer_id: &str, audio_data: Vec<i16>, timestamp: u64) {
-        if let Ok(peers) = self.peer_controllers.lock() {
-            if let Some(controller) = peers.get(peer_id) {
-                let sample = AudioSample {
-                    data: audio_data,
-                    timestamp,
-                };
-                controller.process_received_audio(sample);
-            }
+    pub fn set_peer_volume(&self, peer_id: &str, volume: f32) {
+        if let Ok(mut volumes) = self.peer_volumes.lock() {
+            volumes.insert(peer_id.to_string(), volume.clamp(0.0, 2.0));
         }
     }
 
-    // 获取混音后的音频流（用于本地播放或其他用途）
-    pub fn subscribe_mixed_audio(&self) -> broadcast::Receiver<AudioSample> {
-        self.mixed_audio_sender.subscribe()
+    pub fn get_peer_volume(&self, peer_id: &str) -> f32 {
+        self.peer_volumes
+            .lock()
+            .ok()
+            .and_then(|v| v.get(peer_id).copied())
+            .unwrap_or(1.0)
+    }
+
+    pub fn process_peer_audio(&self, peer_id: &str, audio_data: &mut [i16]) {
+        let volume = self.get_peer_volume(peer_id);
+        for sample in audio_data {
+            *sample = (*sample as f32 * volume).clamp(-32768.0, 32767.0) as i16;
+        }
+    }
+
+    /// 检查捕获是否正在运行
+    pub fn is_capture_running(&self) -> bool {
+        self.capture_running.load(Ordering::Relaxed)
+    }
+}
+
+impl Drop for WebRTCAudioSystem {
+    fn drop(&mut self) {
+        self.stop_capture();
     }
 }
 
 // 使用示例
-pub async fn start_microphone_audio_stream(audio_track: Arc<TrackLocalStaticSample>) -> Result<()> {
-    let audio_system = WebRTCAudioSystem::new()?;
+pub async fn start_microphone_audio_stream(
+    audio_track: Arc<TrackLocalStaticSample>,
+) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    let mut system = WebRTCAudioSystem::new();
 
-    // 初始化音频系统
-    audio_system.initialize().await?;
+    // 启动捕获
+    system.start_capture()?;
 
-    // 添加RTC轨道
-    audio_system.add_rtc_track(audio_track);
-
-    // 添加对方连接
-    let peer_audio_receiver = audio_system.add_peer("peer_1".to_string());
+    // 添加WebRTC轨道
+    let track_uuid = uuid::Uuid::new_v4().to_string();
+    system.add_track(track_uuid.clone(), audio_track);
 
     // 设置音量
-    audio_system.set_microphone_volume(1.0);
-    audio_system.set_system_audio_volume(0.8);
-    audio_system.set_peer_volume("peer_1", 1.2);
+    system.set_mic_volume(1.0);
+    system.set_system_volume(0.8);
+    system.set_peer_volume("peer1", 1.2);
 
-    // 启动音频处理线程
-    audio_system.start_audio_thread().await;
+    println!("Audio system started with track: {}", track_uuid);
 
-    // 处理接收到的对方音频
-    tokio::spawn(async move {
-        let mut receiver = peer_audio_receiver;
-        while let Some(audio_sample) = receiver.recv().await {
-            // 这里可以播放接收到的音频
-            println!(
-                "Received audio sample with {} samples",
-                audio_sample.data.len()
-            );
-        }
-    });
+    // 模拟运行一段时间后暂停某个track
+    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+    system.set_track_active(&track_uuid, false);
+    println!("Track {} disabled", track_uuid);
+
+    // 再次启用
+    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    system.set_track_active(&track_uuid, true);
+    println!("Track {} enabled", track_uuid);
+
+    // 移除track
+    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+    system.remove_track(&track_uuid);
+    println!("Track {} removed", track_uuid);
+
+    // 停止捕获
+    system.stop_capture();
+    println!("Audio capture stopped");
 
     Ok(())
 }
@@ -393,17 +441,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_audio_mixer() {
+    fn test_mixer() {
         let mut mixer = AudioMixer::new();
-        let mic_data = vec![1000, 2000, 3000];
-        let system_data = vec![500, 1000, 1500];
+        let result = mixer.mix(&[1000, 2000], &[500, 1000]);
+        assert_eq!(result, vec![1500, 3000]);
 
-        let mixed = mixer.mix_audio(&mic_data, &system_data);
-        assert_eq!(mixed, vec![1500, 3000, 4500]);
+        mixer.set_mic_volume(0.5);
+        let result = mixer.mix(&[1000, 2000], &[500, 1000]);
+        assert_eq!(result, vec![1000, 2000]);
+    }
 
-        mixer.set_microphone_volume(0.5);
-        mixer.set_system_volume(2.0);
-        let mixed = mixer.mix_audio(&mic_data, &system_data);
-        assert_eq!(mixed, vec![1500, 3000, 4500]);
+    #[test]
+    fn test_audio_system() {
+        let system = WebRTCAudioSystem::new();
+
+        // 测试track管理
+        let track_uuid = "test-uuid";
+        assert!(!system.is_track_active(track_uuid));
+        assert_eq!(system.active_track_count(), 0);
+
+        // 由于无法创建真实的TrackLocalStaticSample，这里只测试基本逻辑
+        assert!(!system.set_track_active(track_uuid, false));
+        assert!(!system.remove_track(track_uuid));
     }
 }

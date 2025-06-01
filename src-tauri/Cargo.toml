@@ -59,7 +59,10 @@ windows = { version = "0.61.1", features = [
     "Win32_Media_Audio",
     "Win32_System_Com",
     "Win32_Foundation",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
 ] }
+enigo = "0.3.0"
 # 方便编译时使用环境变量
 #[build-dependencies]
 #pkg-config = "0.3"

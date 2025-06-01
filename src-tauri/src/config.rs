@@ -9,6 +9,7 @@ use tokio::sync::RwLock;
 use webrtc::ice_transport::ice_candidate::RTCIceCandidateInit;
 use webrtc::peer_connection::RTCPeerConnection;
 
+use crate::audio_capture::winapi::WebRTCAudioSystem;
 use crate::client_utils::current_user::CurUsersInfo;
 use crate::client_utils::user_manager::{UserInfo, UserType};
 use crate::video_capturer::assembly::MultiStreamManager;
@@ -50,9 +51,13 @@ lazy_static! {
     // websocket 客户端的连接，全局共享
     //pub static ref WS_SENDER:Arc<Mutex<Option<awc::BoxedSocket>>>=Arc::new(Mutex::new(None));
 
+    // 视频流管理器
     pub static ref GLOBAL_STREAM_MANAGER: Arc<RwLock<MultiStreamManager>> =
         Arc::new(RwLock::new(MultiStreamManager::new()));
 
+    // 音频流管理器
+    pub static ref GLOBAL_AUDIO_MANAGER: Arc<RwLock<WebRTCAudioSystem>> =
+        Arc::new(RwLock::new(WebRTCAudioSystem::new()));
 
 }
 fn load_storage_path() -> PathBuf {

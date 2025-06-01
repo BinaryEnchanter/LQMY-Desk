@@ -4,7 +4,8 @@ mod client;
 mod client_utils;
 mod config;
 //mod error;
-//mod audio_capture;
+mod audio_capture;
+mod input_executor;
 mod video_capturer;
 mod webrtc;
 use std::sync::{
@@ -18,7 +19,9 @@ use client_utils::{
     disconnect::disconnect_cur_user_by_uuid,
     user_manager::{delete_user, transfer_userinfo_to_vue, update_user_category, UserInfoString},
 };
-use config::{reset_all_info, CONFIG, CURRENT_USERS_INFO, GLOBAL_STREAM_MANAGER, UUID};
+use config::{
+    reset_all_info, CONFIG, CURRENT_USERS_INFO, GLOBAL_AUDIO_MANAGER, GLOBAL_STREAM_MANAGER, UUID,
+};
 use webrtc::webrtc_connect::close_peerconnection;
 
 //use actix_web::{web, App, HttpServer, HttpResponse};
@@ -134,6 +137,7 @@ async fn shutdown_caputure() {
     }
     drop(cur_users);
     GLOBAL_STREAM_MANAGER.write().await.shutdown().await;
+    GLOBAL_AUDIO_MANAGER.write().await.stop_capture();
     CURRENT_USERS_INFO.lock().unwrap().reset();
     println!("[SERVER]关闭捕获，全部用户断开")
 }
