@@ -115,7 +115,7 @@ pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std
                 _=interval.tick()=>{
                     if registered_flag
                     {
-                        println!("[CLIENT] Ping");
+                        //println!("[CLIENT] Ping");
                         let uuid=UUID.lock().unwrap().clone();
                         let ping_json=json!({
                             "type":"ping",
@@ -123,7 +123,7 @@ pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std
                         });
                         drop(uuid);
                         if let Err(e) =  send_lock.lock(){
-                        println!("[CLIENT] send lock {:?}",e)
+                        //println!("[CLIENT] send lock {:?}",e)
                     };
                         connection.send(Message::Text(ping_json.to_string().into())).await?;
                         drop(send_lock.lock().unwrap());
@@ -169,7 +169,7 @@ pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std
                                 break;
                             }
                         };
-                        println!("[CLIENT]收到JSON{:?}", v);
+                        //println!("[CLIENT]收到JSON{:?}", v);
                         let msg_type = match v.get("type").and_then(Value::as_str) {
                             Some(t) => t,
                             None => {
@@ -443,7 +443,7 @@ pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std
                             }
                             "pong"=>{
                                 last_heartbeat=Instant::now();
-                                println!("[CLIENT]pong!")
+                                //println!("[CLIENT]pong!")
                             }
                             other => println!("[CLIENT] Unknown message type: {}", other),
                         }

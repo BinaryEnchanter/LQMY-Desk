@@ -136,8 +136,8 @@ async fn shutdown_caputure() {
         disconnect_cur_user_by_uuid(&curinfo.uuid);
     }
     drop(cur_users);
-    GLOBAL_STREAM_MANAGER.write().await.shutdown().await;
-    GLOBAL_AUDIO_MANAGER.write().await.stop_capture();
+    GLOBAL_STREAM_MANAGER.shutdown().await;
+    GLOBAL_AUDIO_MANAGER.stop_capture();
     CURRENT_USERS_INFO.lock().unwrap().reset();
     println!("[SERVER]关闭捕获，全部用户断开")
 }

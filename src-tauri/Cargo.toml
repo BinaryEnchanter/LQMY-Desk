@@ -7,6 +7,9 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[profile.dev]
+overflow-checks = false
+
 [lib]
 # The `_lib` suffix may seem redundant but it is necessary
 # to make the lib name unique and wouldn't conflict with the bin name.
@@ -63,6 +66,7 @@ windows = { version = "0.61.1", features = [
     "Win32_System_Variant",
 ] }
 enigo = "0.3.0"
+futures = "0.3"
 # 方便编译时使用环境变量
 #[build-dependencies]
 #pkg-config = "0.3"

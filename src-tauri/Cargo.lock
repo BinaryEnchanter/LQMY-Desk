@@ -2942,6 +2942,7 @@ dependencies = [
  "bytes",
  "chrono",
  "enigo",
+ "futures",
  "futures-util",
  "jsonwebtoken",
  "jwt",

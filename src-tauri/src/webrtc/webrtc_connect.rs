@@ -244,19 +244,13 @@ pub async fn handle_webrtc_offer(offer: &web::Json<JWTOfferRequest>) -> AnswerRe
                 tokio::task::spawn(async move {
                     // 5. 启动后台任务，不断读包并写入 RTP Track
                     {
-                        if let Err(e) = GLOBAL_STREAM_MANAGER.write().await.start_capture().await {
+                        if let Err(e) = GLOBAL_STREAM_MANAGER.start_capture().await {
                             println!("[STREAM MANAGER]启动失败：{:?}", e)
                         };
                         let q = select_mode(&mode3, &client_uuid3);
-                        let _sd_rx = GLOBAL_STREAM_MANAGER
-                            .read()
-                            .await
-                            .add_quality_stream(q)
-                            .await;
+                        let _sd_rx = GLOBAL_STREAM_MANAGER.add_quality_stream(q).await;
 
                         if let Err(e) = GLOBAL_STREAM_MANAGER
-                            .read()
-                            .await
                             .add_webrtc_track(&client_uuid3.clone().as_str(), video_track2)
                             .await
                         {
@@ -264,13 +258,10 @@ pub async fn handle_webrtc_offer(offer: &web::Json<JWTOfferRequest>) -> AnswerRe
                         };
                     }
                     {
-                        if let Err(e) = GLOBAL_AUDIO_MANAGER.write().await.start_capture() {
+                        if let Err(e) = GLOBAL_AUDIO_MANAGER.start_capture() {
                             println!("[AUDIO MANAGER]启动失败：{:?}", e)
                         }
-                        GLOBAL_AUDIO_MANAGER
-                            .read()
-                            .await
-                            .add_track(client_uuid3, audio_track2);
+                        GLOBAL_AUDIO_MANAGER.add_track(client_uuid3, audio_track2);
                     }
                 });
             } else if state == RTCPeerConnectionState::Closed {
@@ -280,15 +271,8 @@ pub async fn handle_webrtc_offer(offer: &web::Json<JWTOfferRequest>) -> AnswerRe
                     if let Err(e) = pc3.close().await {
                         println!("[RTC]关闭peerconnection失败{:?}", e)
                     } else {
-                        GLOBAL_STREAM_MANAGER
-                            .write()
-                            .await
-                            .close_track_write(&client_uuid3)
-                            .await;
-                        GLOBAL_AUDIO_MANAGER
-                            .read()
-                            .await
-                            .remove_track(&client_uuid3);
+                        GLOBAL_STREAM_MANAGER.close_track_write(&client_uuid3).await;
+                        GLOBAL_AUDIO_MANAGER.remove_track(&client_uuid3);
                         println!("[RTC]被动关闭{:?}的连接", client_uuid3)
                     }
                 });
@@ -304,15 +288,8 @@ pub async fn handle_webrtc_offer(offer: &web::Json<JWTOfferRequest>) -> AnswerRe
                     if let Err(e) = pc3.close().await {
                         println!("[RTC]关闭peerconnection失败{:?}", e)
                     } else {
-                        GLOBAL_STREAM_MANAGER
-                            .write()
-                            .await
-                            .close_track_write(&client_uuid3)
-                            .await;
-                        GLOBAL_AUDIO_MANAGER
-                            .read()
-                            .await
-                            .remove_track(&client_uuid3);
+                        GLOBAL_STREAM_MANAGER.close_track_write(&client_uuid3).await;
+                        GLOBAL_AUDIO_MANAGER.remove_track(&client_uuid3);
                         println!("[RTC]被动关闭{:?}的连接", client_uuid3)
                     };
                 });
@@ -439,12 +416,8 @@ pub async fn close_peerconnection(client_uuid: &str) {
 
         println!("[CLOSE PC]指定用户的RTC关闭成功，{:?}", client_uuid);
         //end_screen_capture(false);
-        GLOBAL_STREAM_MANAGER
-            .write()
-            .await
-            .close_track_write(client_uuid)
-            .await;
-        GLOBAL_AUDIO_MANAGER.read().await.remove_track(&client_uuid);
+        GLOBAL_STREAM_MANAGER.close_track_write(client_uuid).await;
+        GLOBAL_AUDIO_MANAGER.remove_track(&client_uuid);
     } else {
         println!("[CLOSE PC]指定用户的RTC连接不存在{:?}", client_uuid);
     }
