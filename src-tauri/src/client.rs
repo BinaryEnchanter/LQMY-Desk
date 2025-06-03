@@ -36,7 +36,7 @@ struct PayloadWithCmd {
 use crate::{
     client_utils::{
         auth::{validate_jwt, AuthRequest},
-        current_user::{CrtlAns, CrtlReq, CurUsersInfo},
+        current_user::{CrtlAns, CrtlReq},
         dialog::show_iknow_dialog,
         disconnect::DisconnectReq,
         password::generate_connection_password,
@@ -115,7 +115,7 @@ pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std
                 _=interval.tick()=>{
                     if registered_flag
                     {
-                        println!("[CLIENT] Ping");
+                        //println!("[CLIENT] Ping");
                         let uuid=UUID.lock().unwrap().clone();
                         let ping_json=json!({
                             "type":"ping",
@@ -212,7 +212,7 @@ pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std
                                 let msg = serde_json::from_str::<ServerMessage>(&txt_str).unwrap();
                                 if let Ok(p) = serde_json::from_str::<PayloadWithCmd>(msg.payload.clone().as_str().unwrap())
                                 {
-                                    println!("[message]payload {:?}",p);
+                                    //println!("[message]payload {:?}",p);
                                     match p.cmd.as_str() {
                                         "auth" => {
                                             // let authreq=json!(AuthRequest{ device_name: p.data.get("device_name").and_then(Value::as_str).unwrap().to_string(),
@@ -394,7 +394,7 @@ pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std
                                                         return ;
                                                     }
                                                     if CURRENT_USERS_INFO.lock().unwrap().is_controller_by_uuid(control_req.uuid.clone()){
-                                                        close_peerconnection(&control_req.uuid).await
+                                                        CURRENT_USERS_INFO.lock().unwrap().revoke_control();
                                                     }
 
                                                     });
@@ -406,33 +406,11 @@ pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std
                                                 tokio::spawn(async move{
                                                     //let res=crate::webrtc::webrtc_connect::handle_webrtc_offer(web::Json(disconnect_req)).await;
                                                     // JWT验证
-                                                    let body:String;
-                                                    let status =if !validate_jwt(&control_req.jwt)||CURRENT_USERS_INFO.lock().unwrap().has_controller(){
-                                                        println!("[CONTROL]已有控制者");
-                                                        body="已有控制者".to_string();
-                                                        "400"
 
-                                                    }else if CURRENT_USERS_INFO.lock().unwrap().set_ptr_by_serial(&control_req.device_serial) {
-                                                        body="获得控制权".to_string();
-                                                        "200"
-                                                    }else{
-                                                        body="用户不存在".to_string();
-                                                        "400"
-                                                    };
-                                                    let result=CrtlAns{ status: status.to_string(), body:body };
-                                                    let uuid=UUID.lock().unwrap().clone();
-                                                    let reply = json!({
-                                                        "type": "message",
-                                                        "target_uuid": msg.from,
-                                                        "from":uuid,
-                                                        "payload": json!(result),
-                                                    });
-                                                    drop(uuid);
-                                                    let mut pending=PENDING.lock().unwrap();
-                                                    pending.push(reply.clone());
-                                                    drop(pending);
-                                                    SEND_NOTIFY.notify_one();
-
+                                                    if !validate_jwt(&control_req.jwt){
+                                                        println!("[CLOSE RTC]JWT验证失败");
+                                                       };
+                                                    close_peerconnection(&control_req.uuid).await;
                                                     });
                                             }
                                         }
@@ -443,7 +421,7 @@ pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std
                             }
                             "pong"=>{
                                 last_heartbeat=Instant::now();
-                                println!("[CLIENT]pong!")
+                                //println!("[CLIENT]pong!")
                             }
                             other => println!("[CLIENT] Unknown message type: {}", other),
                         }

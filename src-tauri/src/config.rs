@@ -56,7 +56,14 @@ lazy_static! {
 
 }
 fn load_storage_path() -> PathBuf {
-    "E:/WHU/SoftwareEngineering/GroupWork/LQMY-Desk".into()
+    #[cfg(debug_assertions)]
+    {
+        "E:/WHU/SoftwareEngineering/GroupWork/LQMY-Desk".into()
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        "./".into()
+    }
 }
 
 pub fn get_userinfo_path() -> PathBuf {

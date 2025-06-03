@@ -1,9 +1,11 @@
 use crate::client::{PENDING, SEND_NOTIFY};
 use crate::config::{GLOBAL_STREAM_MANAGER, PEER_CONNECTION, UUID};
+use crate::input_executor::input::decode_and_dispatch;
 use crate::video_capturer::assembly::QualityConfig;
 
 use actix_web::web;
 
+use enigo::{Enigo, Settings};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -58,7 +60,7 @@ pub struct CandidateResponse {
 pub async fn handle_webrtc_offer(offer: &web::Json<JWTOfferRequest>) -> AnswerResponse {
     println!("[WEBRTC]准备启动");
     let client_uuid = &offer.client_uuid;
-    let mode = &offer.mode;
+
     // 1. 初始化 MediaEngine 并注册 codecs
     let mut m = MediaEngine::default();
     if let Err(e) = m.register_default_codecs() {
@@ -99,22 +101,6 @@ pub async fn handle_webrtc_offer(offer: &web::Json<JWTOfferRequest>) -> AnswerRe
         Box::pin(async {})
     }));
 
-    // 4. 添加音轨（Opus）
-    // let audio_track = Arc::new(TrackLocalStaticSample::new(
-    //     RTCRtpCodecCapability {
-    //         mime_type: "audio/opus".into(),
-    //         clock_rate: 48000,
-    //         channels: 2,
-
-    //         ..Default::default()
-    //     },
-    //     "audio".into(),
-    //     "rust-audio".into(),
-    // ));
-    // let _ = pc.add_track(audio_track).await;
-
-    // 5. 添加视频轨，初始模式决定 fmtp line
-
     let video_track = Arc::new(TrackLocalStaticSample::new(
         RTCRtpCodecCapability {
             mime_type: "video/H264".into(),
@@ -144,80 +130,39 @@ pub async fn handle_webrtc_offer(offer: &web::Json<JWTOfferRequest>) -> AnswerRe
         "video".into(),      // track ID
         "rust-video".into(), // stream ID
     ));
-    // let video_track = Arc::new(TrackLocalStaticRTP::new(
-    //     RTCRtpCodecCapability {
-    //         mime_type: "video/H264".into(),
-    //         sdp_fmtp_line: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"
-    //             .into(),
-    //         clock_rate: 90000,
-    //         rtcp_feedback: vec![
-    //             RTCPFeedback {
-    //                 typ: "nack".to_owned(),
-    //                 parameter: "".to_owned(),
-    //             },
-    //             RTCPFeedback {
-    //                 typ: "nack".to_owned(),
-    //                 parameter: "pli".to_owned(), // picture loss indication
-    //             },
-    //             RTCPFeedback {
-    //                 typ: "goog-remb".to_owned(), // optional, for bandwidth estimation
-    //                 parameter: "".to_owned(),
-    //             },
-    //             RTCPFeedback {
-    //                 typ: "ccm".to_owned(),
-    //                 parameter: "fir".to_owned(),
-    //             },
-    //         ],
-    //         ..Default::default()
-    //     },
-    //     "video".into(),
-    //     "rust-video".into(),
-    // ));
+
     pc.add_track(video_track.clone()).await.unwrap();
 
-    // // 6. DataChannel 信令与重协商
-    // 设置监听：对方创建的 DataChannel 到来时触发
+    // 6. DataChannel 信令与重协商：
+    //    监听远端新建的 DataChannel，收到消息后交给 decode_and_dispatch 去执行
     pc.on_data_channel(Box::new(move |dc: Arc<RTCDataChannel>| {
-        println!("[WEBRTC] 收到远端 DataChannel：label = {}", dc.label());
+        println!("[WEBRTC] 收到远端 DataChannel:label = {}", dc.label());
 
-        // 设置消息接收处理逻辑
+        // 每条消息创建一个 Enigo 实例
+        let mut enigo = Enigo::new(&Settings::default()).unwrap();
+
         dc.on_message(Box::new(move |msg| {
-            let data = &msg.data;
+            // 1) 先把 msg.data 当成 UTF-8 文本
+            match std::str::from_utf8(&msg.data) {
+                Ok(text) => {
+                    // **新加：先把原始字符串打印出来**
+                    println!("[DEBUG] 原始收到的消息：{}", text);
 
-            // 解析为字符串
-            if let Ok(text) = std::str::from_utf8(data) {
-                println!("[WEBRTC] 收到 DataChannel 消息文本: {}", text);
-
-                // 尝试解析 JSON
-                match serde_json::from_str::<Value>(text) {
-                    Ok(json) => {
-                        println!("[WEBRTC] JSON 内容：{}", json);
-
-                        // 你可以根据字段内容进行进一步处理
-                        if let Some(cmd) = json.get("cmd").and_then(|v| v.as_str()) {
-                            match cmd {
-                                "mouse_move" => {
-                                    println!("🖱️ 收到鼠标移动命令: {:?}", json);
-                                    // TODO: 处理 mouse_move
-                                }
-                                "keyboard_input" => {
-                                    println!("⌨️ 收到键盘输入命令: {:?}", json);
-                                    // TODO: 处理 keyboard_input
-                                }
-                                _ => {
-                                    println!("⚠️ 未知命令: {}", cmd);
-                                }
-                            }
+                    // 2) 再尝试解析 JSON
+                    match serde_json::from_str::<serde_json::Value>(text) {
+                        Ok(json_val) => {
+                            // 3) 再传给 decode_and_dispatch
+                            decode_and_dispatch(&mut enigo, &json_val);
+                        }
+                        Err(e) => {
+                            eprintln!("[WEBRTC] JSON 解析失败: {}", e);
                         }
                     }
-                    Err(e) => {
-                        eprintln!("❌ JSON 解析失败: {}", e);
-                    }
                 }
-            } else {
-                eprintln!("❌ 非 UTF-8 文本，无法处理");
+                Err(_) => {
+                    eprintln!("[WEBRTC] 收到非 UTF-8 文本，无法处理");
+                }
             }
-
             Box::pin(async {})
         }));
 
@@ -271,7 +216,7 @@ pub async fn handle_webrtc_offer(offer: &web::Json<JWTOfferRequest>) -> AnswerRe
     {
         let pc2 = pc.clone();
         let client_uuid2 = client_uuid.clone();
-        let mode2 = format!("{:?}", mode.clone());
+        let mode2 = offer.mode.clone();
         pc.on_peer_connection_state_change(Box::new(move |state| {
             println!("[WEBRTC]连接状态改变，ConnectionState： {:?}", state);
 
@@ -283,22 +228,21 @@ pub async fn handle_webrtc_offer(offer: &web::Json<JWTOfferRequest>) -> AnswerRe
                 tokio::task::spawn(async move {
                     // 5. 启动后台任务，不断读包并写入 RTP Track
                     if let Err(e) = GLOBAL_STREAM_MANAGER.write().await.start_capture().await {
-                        println!("[STREAM MANAGER]关闭失败：{:?}", e)
+                        println!("[WEBRTC]启动视频失败，{:?}", e)
                     };
                     let q = select_mode(&mode3, &client_uuid3);
-                    let _sd_rx = GLOBAL_STREAM_MANAGER
+                    let sd_rx = GLOBAL_STREAM_MANAGER
                         .read()
                         .await
                         .add_quality_stream(q)
                         .await;
-
                     if let Err(e) = GLOBAL_STREAM_MANAGER
                         .read()
                         .await
-                        .add_webrtc_track(&client_uuid3.clone().as_str(), video_track2)
+                        .add_webrtc_track(&client_uuid3, video_track2)
                         .await
                     {
-                        println!("[STREAM MANAGER]启动写track失败：{:?}", e)
+                        println!("[WEBRTC]写入track失败，{:?}", e)
                     };
                 });
             } else if state == RTCPeerConnectionState::Closed {
@@ -308,13 +252,14 @@ pub async fn handle_webrtc_offer(offer: &web::Json<JWTOfferRequest>) -> AnswerRe
                     if let Err(e) = pc3.close().await {
                         println!("[RTC]关闭peerconnection失败{:?}", e)
                     } else {
-                        GLOBAL_STREAM_MANAGER
-                            .write()
-                            .await
-                            .close_track_write(&client_uuid3)
-                            .await;
                         println!("[RTC]被动关闭{:?}的连接", client_uuid3)
                     }
+                    GLOBAL_STREAM_MANAGER
+                        .read()
+                        .await
+                        .close_track_write(&client_uuid3)
+                        .await
+                    //end_screen_capture(false);
                 });
             } else if state == RTCPeerConnectionState::Disconnected {
                 let pc3 = pc2.clone();
@@ -328,13 +273,14 @@ pub async fn handle_webrtc_offer(offer: &web::Json<JWTOfferRequest>) -> AnswerRe
                     if let Err(e) = pc3.close().await {
                         println!("[RTC]关闭peerconnection失败{:?}", e)
                     } else {
-                        GLOBAL_STREAM_MANAGER
-                            .write()
-                            .await
-                            .close_track_write(&client_uuid3)
-                            .await;
                         println!("[RTC]被动关闭{:?}的连接", client_uuid3)
                     };
+                    GLOBAL_STREAM_MANAGER
+                        .read()
+                        .await
+                        .close_track_write(&client_uuid3)
+                        .await
+                    //end_screen_capture(false);
                 });
             }
             Box::pin(async {})
@@ -353,6 +299,7 @@ pub async fn handle_webrtc_offer(offer: &web::Json<JWTOfferRequest>) -> AnswerRe
         .lock()
         .unwrap()
         .insert(client_uuid.clone(), pc.clone());
+    println!("[PCS]当前连接{:?}", client_uuid.clone());
     AnswerResponse {
         client_uuid: client_uuid.clone(),
         sdp: answer.sdp,
@@ -446,6 +393,11 @@ pub async fn close_peerconnection(client_uuid: &str) {
 
     // Now work with the cloned Arc outside the mutex
     if let Some(pc) = pc_option {
+        GLOBAL_STREAM_MANAGER
+            .read()
+            .await
+            .close_track_write(client_uuid)
+            .await;
         if let Err(e) = pc.close().await {
             println!("[CLOSE PC]指定用户的RTC关闭失败，{:?},{:?}", e, client_uuid);
             return;
@@ -458,21 +410,18 @@ pub async fn close_peerconnection(client_uuid: &str) {
         } // MutexGuard is dropped here
 
         println!("[CLOSE PC]指定用户的RTC关闭成功，{:?}", client_uuid);
+
         //end_screen_capture(false);
-        GLOBAL_STREAM_MANAGER
-            .write()
-            .await
-            .close_track_write(client_uuid)
-            .await
     } else {
         println!("[CLOSE PC]指定用户的RTC连接不存在{:?}", client_uuid);
     }
 }
-
 fn select_mode(mode: &str, client_uuid: &str) -> QualityConfig {
-    match mode {
+    let res = match mode {
         "low" => QualityConfig::new(client_uuid, 320, 240, 10000, 30),
         "high" => QualityConfig::new(client_uuid, 1920, 1080, 500000, 30),
         _ => QualityConfig::new(client_uuid, 1280, 720, 100000, 30),
-    }
+    };
+    println!("{:?}", res);
+    res
 }

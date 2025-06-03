@@ -5,6 +5,7 @@ mod client_utils;
 mod config;
 //mod error;
 //mod audio_capture;
+mod input_executor;
 mod video_capturer;
 mod webrtc;
 use std::sync::{
