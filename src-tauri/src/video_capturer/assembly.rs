@@ -1023,6 +1023,28 @@ impl MultiStreamManager {
         self.track_writers.write().await.clear();
         self.shutdown_signal.store(false, Ordering::Relaxed);
     }
+
+    /// 检查是否可以关闭管理器
+    pub async fn check_shutdown(&mut self) {
+        if !self.encoders.lock().await.is_empty() {
+            return;
+        }
+        self.shutdown_signal.store(true, Ordering::Relaxed);
+
+        if let Some(handle) = self.capture_handle.take() {
+            let _ = handle.await;
+        }
+
+        if let Some(handle) = self.encoding_handle.take() {
+            let _ = handle.await;
+        }
+
+        // 清理资源
+        self.encoders.lock().await.clear();
+        self.encoded_streams.write().await.clear();
+        self.track_writers.write().await.clear();
+        self.shutdown_signal.store(false, Ordering::Relaxed);
+    }
 }
 
 impl Drop for MultiStreamManager {

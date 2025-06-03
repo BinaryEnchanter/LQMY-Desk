@@ -3,6 +3,7 @@ use serde_json::json;
 
 use crate::{
     client::{PENDING, SEND_NOTIFY},
+    client_utils::dialog::show_confirmation_dialog,
     config::UUID,
 };
 
@@ -26,6 +27,10 @@ impl CurUsersInfo {
 
     /// 通过CurInfo来升级对应的用户为控制用户，但是这里没有检测是否已有控制用户
     pub fn set_ptr_by_serial(&mut self, serial: &str) -> bool {
+        if !show_confirmation_dialog("控制请求", &format!("是否允许来自{:?}的控制请求", serial))
+        {
+            return false;
+        };
         let mut pointer = 0;
         for cur_info in self.usersinfo.iter() {
             if *serial != cur_info.device_id {

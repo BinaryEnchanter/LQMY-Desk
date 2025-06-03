@@ -1,5 +1,5 @@
 use crate::client::{PENDING, SEND_NOTIFY};
-use crate::config::{GLOBAL_STREAM_MANAGER, PEER_CONNECTION, UUID};
+use crate::config::{CURRENT_USERS_INFO, GLOBAL_STREAM_MANAGER, PEER_CONNECTION, UUID};
 use crate::input_executor::input::decode_and_dispatch;
 use crate::video_capturer::assembly::QualityConfig;
 
@@ -94,7 +94,11 @@ pub async fn handle_webrtc_offer(offer: &web::Json<JWTOfferRequest>) -> AnswerRe
             };
         }
     };
-
+    PEER_CONNECTION
+        .lock()
+        .unwrap()
+        .insert(client_uuid.clone(), pc.clone());
+    println!("[PCS]当前连接{:?}", client_uuid.clone());
     // 3. (可选) negotiationneeded 调试
     pc.on_negotiation_needed(Box::new(|| {
         println!("[WEBRTC] negotiationneeded");
@@ -132,7 +136,7 @@ pub async fn handle_webrtc_offer(offer: &web::Json<JWTOfferRequest>) -> AnswerRe
     ));
 
     pc.add_track(video_track.clone()).await.unwrap();
-
+    let clien_uuidd = client_uuid.clone();
     // 6. DataChannel 信令与重协商：
     //    监听远端新建的 DataChannel，收到消息后交给 decode_and_dispatch 去执行
     pc.on_data_channel(Box::new(move |dc: Arc<RTCDataChannel>| {
@@ -140,8 +144,15 @@ pub async fn handle_webrtc_offer(offer: &web::Json<JWTOfferRequest>) -> AnswerRe
 
         // 每条消息创建一个 Enigo 实例
         let mut enigo = Enigo::new(&Settings::default()).unwrap();
-
+        let uuiddd = clien_uuidd.clone();
         dc.on_message(Box::new(move |msg| {
+            if !CURRENT_USERS_INFO
+                .lock()
+                .unwrap()
+                .is_controller_by_uuid(uuiddd.clone())
+            {
+                return Box::pin(async {});
+            };
             // 1) 先把 msg.data 当成 UTF-8 文本
             match std::str::from_utf8(&msg.data) {
                 Ok(text) => {
@@ -258,14 +269,15 @@ pub async fn handle_webrtc_offer(offer: &web::Json<JWTOfferRequest>) -> AnswerRe
                         .read()
                         .await
                         .close_track_write(&client_uuid3)
-                        .await
+                        .await;
+                    GLOBAL_STREAM_MANAGER.write().await.check_shutdown().await;
                     //end_screen_capture(false);
                 });
             } else if state == RTCPeerConnectionState::Disconnected {
                 let pc3 = pc2.clone();
                 let client_uuid3 = client_uuid2.clone();
                 tokio::task::spawn(async move {
-                    tokio::time::sleep(Duration::from_secs(10)).await;
+                    tokio::time::sleep(Duration::from_secs(3)).await;
                     if pc3.connection_state() != RTCPeerConnectionState::Disconnected {
                         return;
                     }
@@ -279,7 +291,8 @@ pub async fn handle_webrtc_offer(offer: &web::Json<JWTOfferRequest>) -> AnswerRe
                         .read()
                         .await
                         .close_track_write(&client_uuid3)
-                        .await
+                        .await;
+                    GLOBAL_STREAM_MANAGER.write().await.check_shutdown().await;
                     //end_screen_capture(false);
                 });
             }
@@ -295,11 +308,7 @@ pub async fn handle_webrtc_offer(offer: &web::Json<JWTOfferRequest>) -> AnswerRe
     };
 
     // 10. 保存并返回
-    PEER_CONNECTION
-        .lock()
-        .unwrap()
-        .insert(client_uuid.clone(), pc.clone());
-    println!("[PCS]当前连接{:?}", client_uuid.clone());
+
     AnswerResponse {
         client_uuid: client_uuid.clone(),
         sdp: answer.sdp,

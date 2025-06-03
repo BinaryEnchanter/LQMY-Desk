@@ -20,7 +20,10 @@ use client_utils::{
     user_manager::{delete_user, transfer_userinfo_to_vue, update_user_category, UserInfoString},
 };
 use config::{reset_all_info, CONFIG, CURRENT_USERS_INFO, GLOBAL_STREAM_MANAGER, UUID};
+use std::fs::File;
 use webrtc::webrtc_connect::close_peerconnection;
+
+use crate::config::APPDATA_PATH;
 
 //use actix_web::{web, App, HttpServer, HttpResponse};
 //use tauri::Manager;
@@ -143,8 +146,16 @@ static SHUTDOWN_CALLED: std::sync::atomic::AtomicBool = std::sync::atomic::Atomi
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 16)]
 async fn main() {
+    let path = APPDATA_PATH.lock().unwrap().join("output.txt");
+    let file = File::create(path).unwrap();
+
+    #[cfg(all(windows, not(debug_assertions)))]
+    {
+        use std::os::windows::io::AsRawHandle;
+        use std::process::Command;
+    }
     tauri::Builder::default()
-        .on_window_event(|window, event| {
+        .on_window_event(|_window, event| {
             match event {
                 tauri::WindowEvent::CloseRequested { api, .. } => {
                     // 检查是否已经调用过shutdown
