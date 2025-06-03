@@ -4,8 +4,8 @@ use rand::{distr::Alphanumeric, Rng};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::{env, path::PathBuf};
+use tokio::sync::Mutex as TokMutex;
 use tokio::sync::RwLock;
-
 use webrtc::ice_transport::ice_candidate::RTCIceCandidateInit;
 use webrtc::peer_connection::RTCPeerConnection;
 
@@ -21,7 +21,7 @@ pub struct Config {
 
 lazy_static! {
     // 服务器信息 websocket IP/ 连接口令
-    pub static ref CONFIG: Mutex<Config> = Mutex::new(Config {
+    pub static ref CONFIG: TokMutex<Config> = TokMutex::new(Config {
         server_address: env::var("SERVER_ADDRESS").unwrap_or_else(|_| "wss://localhost:9876".to_string()),
         connection_password: "Uninitia".to_string(),
     });
@@ -32,7 +32,7 @@ lazy_static! {
         user_type:UserType::Normal
     });
     // 当前连接用户信息向量
-    pub static ref CURRENT_USERS_INFO:Mutex<CurUsersInfo>=Mutex::new(CurUsersInfo::new(5));
+    pub static ref CURRENT_USERS_INFO:RwLock<CurUsersInfo>=RwLock::new(CurUsersInfo::new(5));
 
     pub static ref APPDATA_PATH:Mutex<PathBuf>=Mutex::new(load_storage_path());
     // JWT加密密钥，每次启动不一样
@@ -42,9 +42,9 @@ lazy_static! {
     //已经移到user_manage.rs管理
     //pub static ref DEVICE_LIST: Mutex<HashMap<String, DeviceInfo>> = Mutex::new(HashMap::new());// 没有放到CONFIG，为了减少不必要的并发访问冲突
     // 中转站分配的uuid
-    pub static ref UUID:Mutex<String>=Mutex::new("尚未连接服务器".to_string());
+    pub static ref UUID:RwLock<String>=RwLock::new("尚未连接服务器".to_string());
     // 全局 PeerConnection 存储：session_id -> PeerConnection
-    pub static ref PEER_CONNECTION: Mutex<HashMap<String, Arc<RTCPeerConnection>>> = Mutex::new(HashMap::new());
+    pub static ref PEER_CONNECTION: RwLock<HashMap<String, Arc<RTCPeerConnection>>> = RwLock::new(HashMap::new());
     // 全局候选列表存储：session_id -> Vec<RTCIceCandidateInit>
     pub static ref CANDIDATES: Mutex<HashMap<String, Vec<RTCIceCandidateInit>>> = Mutex::new(HashMap::new());
     // websocket 客户端的连接，全局共享
@@ -53,6 +53,8 @@ lazy_static! {
     pub static ref GLOBAL_STREAM_MANAGER: Arc<RwLock<MultiStreamManager>> =
         Arc::new(RwLock::new(MultiStreamManager::new()));
 
+    pub static ref ICE_BUFFER: RwLock<HashMap<String, Vec<RTCIceCandidateInit>>> =
+        RwLock::new(HashMap::new());
 
 }
 fn load_storage_path() -> PathBuf {
@@ -104,24 +106,24 @@ fn generate_jwt_key() -> String {
 //     );
 // }
 
-pub fn update_uuid(uuid: &str) {
-    let mut cur_uuid = UUID.lock().unwrap();
+pub async fn update_uuid(uuid: &str) {
+    let mut cur_uuid = UUID.write().await;
     *cur_uuid = uuid.to_string();
     println!("[CLIENT]服务器分配的uuid：{:?}", *cur_uuid)
 }
 
-pub fn update_server_addr(ipaddr: String) {
-    let mut config = CONFIG.lock().unwrap();
+pub async fn update_server_addr(ipaddr: String) {
+    let mut config = CONFIG.lock().await;
     config.server_address = ipaddr;
     println!("[CLIENT]所连服务器信息改变为:{:?}", config.server_address);
 }
 
-pub fn reset_all_info() {
-    let mut config = CONFIG.lock().unwrap();
+pub async fn reset_all_info() {
+    let mut config = CONFIG.lock().await;
     config.connection_password = "Uninitia".to_string();
-    let mut uuid = UUID.lock().unwrap();
+    let mut uuid = UUID.write().await;
     *uuid = "尚未连接服务器".to_string();
-    CURRENT_USERS_INFO.lock().unwrap().reset();
+    CURRENT_USERS_INFO.write().await.reset();
     println!("[CONFIG]口令、用户与UUID重置")
 }
 

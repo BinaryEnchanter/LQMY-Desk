@@ -1,13 +1,15 @@
 use crate::client::{PENDING, SEND_NOTIFY};
-use crate::config::{CURRENT_USERS_INFO, GLOBAL_STREAM_MANAGER, PEER_CONNECTION, UUID};
+use crate::config::{CURRENT_USERS_INFO, GLOBAL_STREAM_MANAGER, ICE_BUFFER, PEER_CONNECTION, UUID};
 use crate::input_executor::input::decode_and_dispatch;
 use crate::video_capturer::assembly::QualityConfig;
 
 use actix_web::web;
 
 use enigo::{Enigo, Settings};
+use futures_util::FutureExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tokio::sync::mpsc::unbounded_channel;
 
 use std::sync::Arc;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
@@ -57,7 +59,7 @@ pub struct CandidateResponse {
 }
 
 // 初始 Offer/Answer，返回 AnswerResponse
-pub async fn handle_webrtc_offer(offer: &web::Json<JWTOfferRequest>) -> AnswerResponse {
+pub async fn handle_webrtc_offer(offer: &JWTOfferRequest) -> AnswerResponse {
     println!("[WEBRTC]准备启动");
     let client_uuid = &offer.client_uuid;
 
@@ -95,8 +97,8 @@ pub async fn handle_webrtc_offer(offer: &web::Json<JWTOfferRequest>) -> AnswerRe
         }
     };
     PEER_CONNECTION
-        .lock()
-        .unwrap()
+        .write()
+        .await
         .insert(client_uuid.clone(), pc.clone());
     println!("[PCS]当前连接{:?}", client_uuid.clone());
     // 3. (可选) negotiationneeded 调试
@@ -137,80 +139,99 @@ pub async fn handle_webrtc_offer(offer: &web::Json<JWTOfferRequest>) -> AnswerRe
 
     pc.add_track(video_track.clone()).await.unwrap();
     let clien_uuidd = client_uuid.clone();
+    let (tx, mut rx) = unbounded_channel::<serde_json::Value>();
+    tokio::spawn(async move {
+        let mut enigo = Enigo::new(&Settings::default()).unwrap();
+        while let Some(json_val) = rx.recv().await {
+            decode_and_dispatch(&mut enigo, &json_val);
+        }
+    });
     // 6. DataChannel 信令与重协商：
     //    监听远端新建的 DataChannel，收到消息后交给 decode_and_dispatch 去执行
-    pc.on_data_channel(Box::new(move |dc: Arc<RTCDataChannel>| {
-        println!("[WEBRTC] 收到远端 DataChannel:label = {}", dc.label());
+    pc.on_data_channel(Box::new({
+        let uuiddd = clien_uuidd.clone(); // 控制权限检查
+        let tx = tx.clone(); // 转发通道
+        move |dc: Arc<RTCDataChannel>| {
+            println!("[WEBRTC] 收到远端 DataChannel: label = {}", dc.label());
 
-        // 每条消息创建一个 Enigo 实例
-        let mut enigo = Enigo::new(&Settings::default()).unwrap();
-        let uuiddd = clien_uuidd.clone();
-        dc.on_message(Box::new(move |msg| {
-            if !CURRENT_USERS_INFO
-                .lock()
-                .unwrap()
-                .is_controller_by_uuid(uuiddd.clone())
-            {
-                return Box::pin(async {});
-            };
-            // 1) 先把 msg.data 当成 UTF-8 文本
-            match std::str::from_utf8(&msg.data) {
-                Ok(text) => {
-                    // **新加：先把原始字符串打印出来**
-                    println!("[DEBUG] 原始收到的消息：{}", text);
-
-                    // 2) 再尝试解析 JSON
-                    match serde_json::from_str::<serde_json::Value>(text) {
-                        Ok(json_val) => {
-                            // 3) 再传给 decode_and_dispatch
-                            decode_and_dispatch(&mut enigo, &json_val);
+            dc.on_message(Box::new({
+                let uuidddd = uuiddd.clone();
+                let tx = tx.clone();
+                move |msg| {
+                    let data = msg.data.clone();
+                    let uuiddddd = uuidddd.clone();
+                    let tx = tx.clone();
+                    async move {
+                        if !CURRENT_USERS_INFO
+                            .read()
+                            .await
+                            .is_controller_by_uuid(uuiddddd)
+                        {
+                            return;
                         }
-                        Err(e) => {
-                            eprintln!("[WEBRTC] JSON 解析失败: {}", e);
+
+                        match std::str::from_utf8(&data) {
+                            Ok(text) => {
+                                println!("[DEBUG] 收到消息文本: {}", text);
+                                if let Ok(json_val) =
+                                    serde_json::from_str::<serde_json::Value>(text)
+                                {
+                                    // ✅ 推送给 Enigo 控制线程
+                                    if let Err(e) = tx.send(json_val) {
+                                        eprintln!("[ENIGO] 控制消息发送失败: {:?}", e);
+                                    }
+                                } else {
+                                    eprintln!("[WEBRTC] JSON 解析失败");
+                                }
+                            }
+                            Err(_) => eprintln!("[WEBRTC] 收到非 UTF-8 文本"),
                         }
                     }
+                    .boxed()
                 }
-                Err(_) => {
-                    eprintln!("[WEBRTC] 收到非 UTF-8 文本，无法处理");
-                }
-            }
-            Box::pin(async {})
-        }));
+            }));
 
-        Box::pin(async {})
+            Box::pin(async {})
+        }
     }));
 
     // 7. 收集本地 ICE 候选
     {
         let uuid = client_uuid.clone();
         pc.on_ice_candidate(Box::new(move |opt| {
-            if let Some(c) = opt {
-                if let Ok(json) = c.to_json() {
-                    let init = RTCIceCandidateInit {
-                        candidate: json.candidate,
-                        sdp_mid: json.sdp_mid,
-                        sdp_mline_index: json.sdp_mline_index,
-                        username_fragment: None,
-                    };
-                    let my_uuid = UUID.lock().unwrap().clone();
-                    let res = send_ice_candidate(init);
-                    let payload = json!({"cmd":"candidate","value":res});
-                    let reply = json!({
-                        "type": "message",
-                        "target_uuid": uuid,
-                        "from":my_uuid,
-                        "payload": json!(payload),
-                    });
-                    drop(my_uuid);
+            let uuid = uuid.clone(); // capture外部变量
 
-                    let mut pending = PENDING.lock().unwrap();
-                    pending.push(reply.clone());
-                    drop(pending);
-                    SEND_NOTIFY.notify_one();
-                    println!("[CLIENT]RTC返回ICE：{:?}", reply);
+            async move {
+                if let Some(c) = opt {
+                    if let Ok(json) = c.to_json() {
+                        let init = RTCIceCandidateInit {
+                            candidate: json.candidate,
+                            sdp_mid: json.sdp_mid,
+                            sdp_mline_index: json.sdp_mline_index,
+                            username_fragment: None,
+                        };
+
+                        let my_uuid = UUID.read().await.clone();
+                        let res = send_ice_candidate(init);
+                        let payload = json!({"cmd":"candidate","value":res});
+                        let reply = json!({
+                            "type": "message",
+                            "target_uuid": uuid,
+                            "from": my_uuid,
+                            "payload": payload,
+                        });
+
+                        {
+                            let mut pending = PENDING.lock().unwrap();
+                            pending.push(reply.clone());
+                        }
+
+                        SEND_NOTIFY.notify_one();
+                        println!("[CLIENT] RTC返回ICE：{:?}", reply);
+                    }
                 }
             }
-            Box::pin(async {})
+            .boxed()
         }));
     }
 
@@ -242,7 +263,7 @@ pub async fn handle_webrtc_offer(offer: &web::Json<JWTOfferRequest>) -> AnswerRe
                         println!("[WEBRTC]启动视频失败，{:?}", e)
                     };
                     let q = select_mode(&mode3, &client_uuid3);
-                    let sd_rx = GLOBAL_STREAM_MANAGER
+                    let _sd_rx = GLOBAL_STREAM_MANAGER
                         .read()
                         .await
                         .add_quality_stream(q)
@@ -316,21 +337,40 @@ pub async fn handle_webrtc_offer(offer: &web::Json<JWTOfferRequest>) -> AnswerRe
 }
 
 // 客户端上传远端 ICE 候选，直接返回结果字符串
-pub async fn handle_ice_candidate(req: &web::Json<JWTCandidateRequest>) -> String {
-    if let Some(pc) = PEER_CONNECTION.lock().unwrap().get(&req.client_uuid) {
-        let init = RTCIceCandidateInit {
-            candidate: req.candidate.clone(),
-            sdp_mid: req.sdp_mid.clone(),
-            sdp_mline_index: req.sdp_mline_index,
-            username_fragment: None,
-        };
+pub async fn handle_ice_candidate(req: JWTCandidateRequest) -> String {
+    let init = RTCIceCandidateInit {
+        candidate: req.candidate.clone(),
+        sdp_mid: req.sdp_mid.clone(),
+        sdp_mline_index: req.sdp_mline_index,
+        username_fragment: None,
+    };
+
+    if let Some(pc) = PEER_CONNECTION.read().await.get(&req.client_uuid) {
+        // PC存在，直接添加ICE候选
         pc.add_ice_candidate(init).await.unwrap();
         "ICE 注入成功".into()
     } else {
-        "无效 client_uuid".into()
+        // PC不存在，缓冲ICE候选
+        ICE_BUFFER
+            .write()
+            .await
+            .entry(req.client_uuid.clone())
+            .or_insert_with(Vec::new)
+            .push(init);
+        "ICE 已缓冲".into()
     }
 }
 
+// 创建PeerConnection后调用此函数处理缓冲的ICE
+pub async fn flush_buffered_ice(client_uuid: &str) {
+    if let Some(pc) = PEER_CONNECTION.read().await.get(client_uuid) {
+        if let Some(candidates) = ICE_BUFFER.write().await.remove(client_uuid) {
+            for candidate in candidates {
+                let _ = pc.add_ice_candidate(candidate).await;
+            }
+        }
+    };
+}
 // 客户端拉取本地 ICE 候选，直接返回 CandidateResponse
 // pub fn send_ice_candidate(uuid: &str) -> CandidateResponse {
 //     //let client_uuid = info.get("client_uuid").cloned().unwrap_or_default();
@@ -392,7 +432,7 @@ pub fn monitor_video_send_stats(pc: Arc<RTCPeerConnection>) {
 pub async fn close_peerconnection(client_uuid: &str) {
     // First, check if the connection exists and get a clone of the Arc
     let pc_option = {
-        let pcs = PEER_CONNECTION.lock().unwrap();
+        let pcs = PEER_CONNECTION.write().await;
         if pcs.is_empty() {
             println!("[CLOSE PC]指定用户的RTC连接不存在{:?}", client_uuid);
             return;
@@ -414,7 +454,7 @@ pub async fn close_peerconnection(client_uuid: &str) {
 
         // Remove from the HashMap after successful close
         {
-            let mut pcs = PEER_CONNECTION.lock().unwrap();
+            let mut pcs = PEER_CONNECTION.write().await;
             pcs.remove(client_uuid);
         } // MutexGuard is dropped here
 

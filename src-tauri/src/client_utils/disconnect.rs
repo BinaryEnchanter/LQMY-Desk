@@ -3,7 +3,6 @@ use serde_json::json;
 
 use crate::{
     client::{PENDING, SEND_NOTIFY},
-    client_utils::disconnect,
     config::{CURRENT_USERS_INFO, UUID},
 };
 
@@ -28,9 +27,9 @@ pub struct Disconnect {
 }
 
 /// 这个函数不仅要删除当前连接用户的信息，还要返回一个消息告诉对方关闭连接了
-pub fn disconnect_cur_user_by_uuid(uuid: &str) {
+pub async fn disconnect_cur_user_by_uuid(uuid: &str) {
     //删除连接信息
-    if CURRENT_USERS_INFO.lock().unwrap().delete_by_uuid(uuid) {
+    if CURRENT_USERS_INFO.write().await.delete_by_uuid(uuid) {
         // 告知对方
         let res = Disconnect {
             cmd: "disconnect".to_owned(),
@@ -39,7 +38,7 @@ pub fn disconnect_cur_user_by_uuid(uuid: &str) {
         let reply = json!({
             "type": "message",
             "target_uuid": uuid,
-            "from":UUID.lock().unwrap().clone(),
+            "from":UUID.read().await.clone(),
             "payload": json!(res),
         });
         PENDING.lock().unwrap().push(reply.clone());

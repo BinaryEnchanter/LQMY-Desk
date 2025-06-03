@@ -3,7 +3,7 @@ use std::{
     time::Instant,
 };
 
-use actix_web::web;
+//use actix_web::web;
 use awc::{
     ws::{Frame, Message},
     Client,
@@ -42,7 +42,9 @@ use crate::{
         password::generate_connection_password,
     },
     config::{update_uuid, CONFIG, CURRENT_USERS_INFO, UUID},
-    webrtc::webrtc_connect::{close_peerconnection, JWTCandidateRequest, JWTOfferRequest},
+    webrtc::webrtc_connect::{
+        close_peerconnection, flush_buffered_ice, JWTCandidateRequest, JWTOfferRequest,
+    },
 };
 lazy_static! {
     pub static ref CLOSE_NOTIFY: Arc<Notify> = Arc::new(Notify::new());
@@ -50,7 +52,7 @@ lazy_static! {
     pub static ref PENDING: Mutex<Vec<Value>> = Mutex::new(vec![]);
 }
 pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std::error::Error>> {
-    let server_ws = CONFIG.lock().unwrap().server_address.clone(); // ws:// 或 wss://
+    let server_ws = CONFIG.lock().await.server_address.clone(); // ws:// 或 wss://
     generate_connection_password().await;
     println!("[CLIENT] Connecting to {}...", server_ws);
 
@@ -116,7 +118,7 @@ pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std
                     if registered_flag
                     {
                         //println!("[CLIENT] Ping");
-                        let uuid=UUID.lock().unwrap().clone();
+                        let uuid=UUID.read().await.clone();
                         let ping_json=json!({
                             "type":"ping",
                             "from":uuid
@@ -183,7 +185,7 @@ pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std
                                 let uuid = v.get("uuid").and_then(Value::as_str);
                                 match uuid {
                                     Some(id) => {
-                                        update_uuid(id);
+                                        update_uuid(id).await;
                                         //更新heartbeat
                                         last_heartbeat = Instant::now();
                                         registered_flag=true;
@@ -227,9 +229,9 @@ pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std
                                                 tokio::spawn(async move{
 
                                                     let result =
-                                                        crate::client_utils::auth::authenticate(web::Json(auth_req))
+                                                        crate::client_utils::auth::authenticate(auth_req)
                                                     .await;
-                                                    let uuid=UUID.lock().unwrap().clone();
+                                                    let uuid=UUID.read().await.clone();
                                                     let reply = json!({
                                                         "type": "message",
                                                         "target_uuid": msg.from,
@@ -262,9 +264,10 @@ pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std
                                                 }
                                                 //println!("[message]payload value {:?}",offer_req);
                                                 tokio::spawn(async move{
-                                                    let res=crate::webrtc::webrtc_connect::handle_webrtc_offer(&web::Json(jwt_offer_req)).await;
+                                                    let client_uuid=jwt_offer_req.client_uuid.clone();
+                                                    let res=crate::webrtc::webrtc_connect::handle_webrtc_offer(&jwt_offer_req).await;
                                                     {
-                                                        let uuid=UUID.lock().unwrap().clone();
+                                                        let uuid=UUID.read().await.clone();
 
                                                         let payload=json!({"cmd":"answear","value":res});
                                                         let reply = json!({
@@ -281,6 +284,7 @@ pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std
                                                         SEND_NOTIFY.notify_one();
                                                         println!("[CLIENT]RTC返回Answear：{:?}",reply);
                                                     }
+                                                    flush_buffered_ice(&client_uuid).await
                                                     // 发送ICE
                                                     // let uuid=UUID.lock().unwrap().clone();
                                                     // let res=get_ice_candidates(&msg.from).await;
@@ -312,7 +316,7 @@ pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std
                                                     println!("[CNADIDATE_HANDLER]来自{:?}的JWT验证失败",msg.from);
                                                     break;
                                                 }
-                                                let res=crate::webrtc::webrtc_connect::handle_ice_candidate(&web::Json(candidate_req)).await;
+                                                let res=crate::webrtc::webrtc_connect::handle_ice_candidate(candidate_req).await;
                                                 // let uuid=UUID.lock().unwrap().clone();
                                                 // let payload=json!({"cmd":"candiate","value":res});
                                                 // let reply = json!({
@@ -344,7 +348,7 @@ pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std
 
                                                         }else {
 
-                                                            CURRENT_USERS_INFO.lock().unwrap().delete_by_uuid(&msg.from);
+                                                            CURRENT_USERS_INFO.write().await.delete_by_uuid(&msg.from);
                                                         };
                                                     });
                                                 }
@@ -356,12 +360,12 @@ pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std
                                                     //let res=crate::webrtc::webrtc_connect::handle_webrtc_offer(web::Json(disconnect_req)).await;
                                                     // JWT验证
                                                     let body:String;
-                                                    let status =if !validate_jwt(&control_req.jwt)||CURRENT_USERS_INFO.lock().unwrap().has_controller(){
+                                                    let status =if !validate_jwt(&control_req.jwt)||CURRENT_USERS_INFO.read().await.has_controller(){
                                                         println!("[CONTROL]已有控制者");
                                                         body="已有控制者".to_string();
                                                         "400"
 
-                                                    }else if CURRENT_USERS_INFO.lock().unwrap().set_ptr_by_serial(&control_req.device_serial) {
+                                                    }else if CURRENT_USERS_INFO.write().await.set_ptr_by_serial(&control_req.device_serial).await {
                                                         body="获得控制权".to_string();
                                                         "200"
                                                     }else{
@@ -369,7 +373,7 @@ pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std
                                                         "400"
                                                     };
                                                     let result=CrtlAns{ status: status.to_string(), body:body };
-                                                    let uuid=UUID.lock().unwrap().clone();
+                                                    let uuid=UUID.read().await.clone();
                                                     let reply = json!({
                                                         "type": "message",
                                                         "target_uuid": msg.from,
@@ -393,8 +397,8 @@ pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std
                                                     if !validate_jwt(&control_req.jwt){
                                                         return ;
                                                     }
-                                                    if CURRENT_USERS_INFO.lock().unwrap().is_controller_by_uuid(control_req.uuid.clone()){
-                                                        CURRENT_USERS_INFO.lock().unwrap().revoke_control();
+                                                    if CURRENT_USERS_INFO.read().await.is_controller_by_uuid(control_req.uuid.clone()){
+                                                        CURRENT_USERS_INFO.write().await.revoke_control().await;
                                                     }
 
                                                     });

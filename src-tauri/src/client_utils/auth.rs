@@ -3,7 +3,7 @@ use super::dialog::show_confirmation_dialog;
 use super::user_manager::UserType;
 use crate::client_utils::user_manager::{add_device, get_user_by_serial};
 use crate::config::{CONFIG, CURRENT_USERS_INFO, JWT_KEY, THIS_TIME};
-use actix_web::web;
+
 use chrono;
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use lazy_static::lazy_static;
@@ -42,9 +42,9 @@ lazy_static! {
 ///                             （2）信任：返回jwt，不验证口令，更新CURRENT——USER
 ///                             （3）普通：口令正确，并且ui确认，则返回jwt，更新CURRENT——USER
 ///                             （4）新用户：口令正确，并且ui确认，则返回jwt，更新CURRENT——USER，添加新用户信息
-pub async fn authenticate(info: web::Json<AuthRequest>) -> AuthResponse {
+pub async fn authenticate(info: AuthRequest) -> AuthResponse {
     {
-        let cur_users = CURRENT_USERS_INFO.lock().unwrap();
+        let cur_users = CURRENT_USERS_INFO.read().await;
         if !cur_users.is_avail() {
             println!(
                 "[SERVER_INFO]当前已连接设备上限,来自{:?}的连接请求直接拒绝",
@@ -78,10 +78,7 @@ pub async fn authenticate(info: web::Json<AuthRequest>) -> AuthResponse {
                 user_type: UserType::Trusted,
                 uuid: info.uuid.clone(),
             };
-            CURRENT_USERS_INFO
-                .lock()
-                .unwrap()
-                .add_new_cur_user(&userinfo);
+            CURRENT_USERS_INFO.write().await.add_new_cur_user(&userinfo);
             let token = generate_jwt(&info.device_serial);
             //HttpResponse::Ok().json(token)
             AuthResponse {
@@ -91,7 +88,7 @@ pub async fn authenticate(info: web::Json<AuthRequest>) -> AuthResponse {
         }
         //普通用户，验证成功则返回jwt
         Some(user) if user.user_type == UserType::Normal => {
-            let stored_pw = CONFIG.lock().unwrap().connection_password.clone();
+            let stored_pw = CONFIG.lock().await.connection_password.clone();
             if stored_pw == info.password {
                 // 添加至连接队列
 
@@ -128,10 +125,7 @@ pub async fn authenticate(info: web::Json<AuthRequest>) -> AuthResponse {
                         user_type: UserType::Normal,
                         uuid: info.uuid.clone(),
                     };
-                    CURRENT_USERS_INFO
-                        .lock()
-                        .unwrap()
-                        .add_new_cur_user(&userinfo);
+                    CURRENT_USERS_INFO.write().await.add_new_cur_user(&userinfo);
                     let token = generate_jwt(&info.device_serial);
                     //HttpResponse::Ok().json(token)
                     AuthResponse {
@@ -155,7 +149,7 @@ pub async fn authenticate(info: web::Json<AuthRequest>) -> AuthResponse {
         }
         //新用户，验证成功则记录信息并返回jwt
         _ => {
-            let stored_pw = CONFIG.lock().unwrap().connection_password.clone();
+            let stored_pw = CONFIG.lock().await.connection_password.clone();
             println!("here");
             if stored_pw == info.password {
                 {
@@ -192,10 +186,7 @@ pub async fn authenticate(info: web::Json<AuthRequest>) -> AuthResponse {
                         user_type: UserType::Normal,
                         uuid: info.uuid.clone(),
                     };
-                    CURRENT_USERS_INFO
-                        .lock()
-                        .unwrap()
-                        .add_new_cur_user(&userinfo);
+                    CURRENT_USERS_INFO.write().await.add_new_cur_user(&userinfo);
                     let token = generate_jwt(&info.device_serial);
                     add_device(&info.device_name, &info.device_serial).await;
                     println!("[AUTH_INFO]生成jwt{:?}", token);

@@ -108,10 +108,11 @@ export default {
         // --- RPC 调用
         async function fetchServerInfo() {
             try {
-                const [address, password, uuid, isRunning, usersinfo] = await invoke(
+
+                const result = await invoke(
                     "get_server_info"
                 );
-                serverStore.updateServerInfo(address, password, uuid, isRunning, usersinfo);
+                serverStore.updateServerInfo(result[0], result[1], result[2], result[3], result[4]);
             } catch (error) {
                 console.error("获取服务器信息失败:", error);
             }
@@ -148,7 +149,7 @@ export default {
         let timerId = null;
         onMounted(() => {
             fetchServerInfo();
-            timerId = setInterval(fetchServerInfo, 5000);
+            timerId = setInterval(fetchServerInfo, 200);
         });
         onUnmounted(() => {
             clearInterval(timerId);

@@ -3,7 +3,7 @@ use serde_json::json;
 
 use crate::{
     client::{PENDING, SEND_NOTIFY},
-    client_utils::dialog::show_confirmation_dialog,
+    client_utils::{dialog::show_confirmation_dialog, user_manager::get_user_by_serial},
     config::UUID,
 };
 
@@ -26,11 +26,28 @@ impl CurUsersInfo {
     }
 
     /// 通过CurInfo来升级对应的用户为控制用户，但是这里没有检测是否已有控制用户
-    pub fn set_ptr_by_serial(&mut self, serial: &str) -> bool {
-        if !show_confirmation_dialog("控制请求", &format!("是否允许来自{:?}的控制请求", serial))
-        {
-            return false;
+    pub async fn set_ptr_by_serial(&mut self, serial: &str) -> bool {
+        if let Some(this_user) = get_user_by_serial(serial).await {
+            match this_user.user_type {
+                UserType::Blacklist => return false,
+                UserType::Normal => {
+                    let seriall = serial.to_string();
+                    let approved: bool = tokio::task::spawn_blocking(move || {
+                        show_confirmation_dialog(
+                            "控制请求",
+                            &format!("是否允许来自{:?}的控制请求", seriall),
+                        )
+                    })
+                    .await
+                    .expect("blocking task panicked");
+                    if !approved {
+                        return false;
+                    };
+                }
+                UserType::Trusted => {}
+            }
         };
+
         let mut pointer = 0;
         for cur_info in self.usersinfo.iter() {
             if *serial != cur_info.device_id {
@@ -68,7 +85,7 @@ impl CurUsersInfo {
     pub fn lookup_by_serial(&self, serial: &str) -> bool {
         let mut res = false;
         for cur_info in self.usersinfo.iter() {
-            res |= (serial == cur_info.device_id);
+            res |= serial == cur_info.device_id;
         }
         res
     }
@@ -113,12 +130,12 @@ impl CurUsersInfo {
         }
     }
 
-    pub fn revoke_control(&mut self) {
+    pub async fn revoke_control(&mut self) {
         let result = CrtlAns {
             status: "100".to_string(),
             body: "控制权取回".to_string(),
         };
-        let uuid = UUID.lock().unwrap().clone();
+        let uuid = UUID.read().await.clone();
         let reply = json!({
             "type": "message",
             "target_uuid": self.usersinfo[self.pointer].uuid,

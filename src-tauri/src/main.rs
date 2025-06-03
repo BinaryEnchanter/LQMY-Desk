@@ -34,65 +34,80 @@ pub struct AppState {
 }
 
 #[tauri::command]
-fn start_server(state: tauri::State<AppState>) {
+async fn start_server(state: tauri::State<'_, AppState>) -> Result<(), String> {
     let is_running = state.is_running.clone();
     let exit_flag = state.exit_flag.clone();
+
     std::thread::spawn(move || {
         let sys = actix_rt::System::new();
         is_running.store(true, Ordering::Relaxed);
-        exit_flag.store(false, std::sync::atomic::Ordering::Relaxed);
-        println!("[CLIENT]exit_flag:{:?}", exit_flag);
-        let _ = sys.block_on(async { client::start_client(exit_flag).await });
+        exit_flag.store(false, Ordering::Relaxed);
+
+        println!("[CLIENT] exit_flag: {:?}", exit_flag);
+
+        let result = sys.block_on(async { client::start_client(exit_flag.clone()).await });
+
+        if let Err(e) = result {
+            eprintln!("[CLIENT] start_client 出错: {}", e);
+        }
 
         is_running.store(false, Ordering::Relaxed);
-        reset_all_info();
-        //reset_cur_user();
+
+        // 必须在 block_on 内部调用异步函数
+        sys.block_on(async {
+            reset_all_info().await;
+        });
     });
+
+    Ok(())
 }
 
 #[tauri::command]
-fn stop_server(state: tauri::State<AppState>) {
-    let _ = tokio::spawn(async move {
-        shutdown_caputure().await;
-    });
+async fn stop_server(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    // 先执行异步关闭
+    shutdown_caputure().await;
+
+    // 更新状态标志
     state.is_running.store(false, Ordering::Relaxed);
-    // 重置连接状况，将连接者信息清楚
-    state
-        .exit_flag
-        .store(true, std::sync::atomic::Ordering::Relaxed);
+    state.exit_flag.store(true, Ordering::Relaxed);
+
     println!(
-        "Exit flag set, client should shut down soon.{:?}",
+        "Exit flag set, client should shut down soon. {:?}",
         state.exit_flag
     );
+
     CLOSE_NOTIFY.notify_one();
 
-    //reset_cur_user();
+    // 重置全局信息
+    reset_all_info().await;
 
-    reset_all_info();
-    println!("[SERVER_INFO: Server stopped.");
+    println!("[SERVER_INFO: Server stopped.]");
+
+    Ok(())
 }
-
 #[tauri::command]
-fn get_server_info(state: tauri::State<AppState>) -> (String, String, String, bool, CurUsersInfo) {
-    let config = CONFIG.lock().unwrap();
-    let uuid = UUID.lock().unwrap();
+async fn get_server_info(
+    state: tauri::State<'_, AppState>,
+) -> Result<(String, String, String, bool, CurUsersInfo), String> {
+    let config = CONFIG.lock().await;
+    let uuid = UUID.read().await.clone();
     println!(
         "[SERVER_INFO: Acquiring addr {:?} & password {:?} & uuid {:?}]",
         config.server_address, config.connection_password, uuid
     );
     //let cur_user = CURRENT_USER.lock().unwrap();
-    let cur_users_info = CURRENT_USERS_INFO.lock().unwrap().clone();
-    let is_running = state.is_running.clone();
-    (
+    let cur_users_info = CURRENT_USERS_INFO.read().await.clone();
+    let is_running = state.is_running.load(Ordering::Relaxed).clone();
+    Ok((
         config.server_address.clone(),
         config.connection_password.clone(),
         // cur_user.device_name.clone(),
         // cur_user.device_id.clone(),
         // format!("{:?}", cur_user.user_type),
         uuid.clone(),
-        is_running.load(Ordering::Relaxed),
+        is_running,
         cur_users_info,
-    )
+    ))
 }
 
 #[tauri::command]
@@ -112,13 +127,13 @@ async fn delete_userinfo(serial: String) {
 
 #[tauri::command]
 async fn update_server_addr(ipaddr: String) {
-    config::update_server_addr(ipaddr)
+    config::update_server_addr(ipaddr).await
 }
 
 #[tauri::command]
 async fn disconnect_by_uuid(uuid: String) {
     close_peerconnection(&uuid).await;
-    disconnect_cur_user_by_uuid(&uuid);
+    disconnect_cur_user_by_uuid(&uuid).await;
 }
 #[tauri::command]
 async fn backend_close_handler() {
@@ -127,18 +142,18 @@ async fn backend_close_handler() {
 #[tauri::command]
 /// 撤销控制，会向对方发消息
 async fn revoke_control() {
-    CURRENT_USERS_INFO.lock().unwrap().revoke_control();
+    CURRENT_USERS_INFO.write().await.revoke_control().await;
 }
 #[tauri::command]
 async fn shutdown_caputure() {
-    let cur_users = CURRENT_USERS_INFO.lock().unwrap().usersinfo.clone();
+    let cur_users = CURRENT_USERS_INFO.read().await.usersinfo.clone();
     for curinfo in cur_users.iter() {
         close_peerconnection(&curinfo.uuid).await;
-        disconnect_cur_user_by_uuid(&curinfo.uuid);
+        disconnect_cur_user_by_uuid(&curinfo.uuid).await;
     }
     drop(cur_users);
     GLOBAL_STREAM_MANAGER.write().await.shutdown().await;
-    CURRENT_USERS_INFO.lock().unwrap().reset();
+    CURRENT_USERS_INFO.write().await.reset();
     println!("[SERVER]关闭捕获，全部用户断开")
 }
 
