@@ -415,6 +415,7 @@ pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std
                                                         println!("[CLOSE RTC]JWT验证失败");
                                                        };
                                                     close_peerconnection(&control_req.uuid).await;
+                                                    CURRENT_USERS_INFO.write().await.revoke_control().await;
                                                     });
                                             }
                                         }

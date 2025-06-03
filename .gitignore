@@ -30,3 +30,7 @@ output.h264
 output.rtp
 video.sdp
 user_data.json
+uninstall.exe
+.gitignore
+lqmy-desk.exe
+output.txt
