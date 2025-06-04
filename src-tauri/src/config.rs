@@ -11,7 +11,7 @@ use webrtc::peer_connection::RTCPeerConnection;
 
 use crate::client_utils::current_user::CurUsersInfo;
 use crate::client_utils::user_manager::{UserInfo, UserType};
-use crate::video_capturer::assembly::MultiStreamManager;
+use crate::video_capturer::ffmpeg::MultiStreamManager;
 pub const NO_CONNECTION_INDENTIFIER: &str = "!@#$%^&*()";
 // 存储全局信息的结构体
 pub struct Config {

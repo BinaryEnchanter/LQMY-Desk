@@ -1,0 +1,4 @@
+[env]
+FFMPEG_INCLUDE_DIR = { value = "ffmpeg/include", relative = true }
+FFMPEG_LIB_DIR = { value = "ffmpeg/lib", relative = true }
+PATH = { value = "ffmpeg/bin;${PATH}", relative = true }

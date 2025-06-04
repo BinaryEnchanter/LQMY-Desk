@@ -3,6 +3,40 @@
 version = 4
 
 [[package]]
+name = "ac-ffmpeg"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd5735fde11540ea2a6e5cc93fea7fe8d8ff0f39f1630cbd21c74155d5ae6710"
+dependencies = [
+ "ac-ffmpeg-build",
+ "ac-ffmpeg-features",
+ "cc",
+ "lazy_static",
+ "rustc_version",
+]
+
+[[package]]
+name = "ac-ffmpeg-build"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ddd4d05f90fca97e6f5960cbca5154985db2b3e91592d874f0f22a8a34f53aa9"
+dependencies = [
+ "cfg-if",
+ "pkg-config",
+ "vcpkg",
+]
+
+[[package]]
+name = "ac-ffmpeg-features"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c6bdd0b60d57a35283db1b94d786f47857b412195943b38be68a9dbb481adb9c"
+dependencies = [
+ "ac-ffmpeg-build",
+ "cc",
+]
+
+[[package]]
 name = "actix-codec"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2936,6 +2970,7 @@ checksum = "13dc2df351e3202783a1fe0d44375f7295ffb4049267b0f3018346dc122a1d94"
 name = "lqmy-desk"
 version = "0.1.0"
 dependencies = [
+ "ac-ffmpeg",
  "actix-rt",
  "actix-web",
  "awc",
@@ -5766,9 +5801,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "1.44.2"
+version = "1.45.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6b88822cbe49de4185e3a4cbf8321dd487cf5fe0c5c65695fef6346371e9c48"
+checksum = "75ef51a33ef1da925cea3e4eb122833cb377c61439ca401b770f54902b806779"
 dependencies = [
  "backtrace",
  "bytes",

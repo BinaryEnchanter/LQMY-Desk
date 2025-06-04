@@ -131,6 +131,9 @@ impl CurUsersInfo {
     }
 
     pub async fn revoke_control(&mut self) {
+        if self.pointer >= self.max {
+            return;
+        }
         let result = CrtlAns {
             status: "100".to_string(),
             body: "控制权取回".to_string(),

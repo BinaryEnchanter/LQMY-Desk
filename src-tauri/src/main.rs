@@ -152,7 +152,7 @@ async fn shutdown_caputure() {
         disconnect_cur_user_by_uuid(&curinfo.uuid).await;
     }
     drop(cur_users);
-    GLOBAL_STREAM_MANAGER.write().await.shutdown().await;
+    //GLOBAL_STREAM_MANAGER.write().await.shutdown().await;
     CURRENT_USERS_INFO.write().await.reset();
     println!("[SERVER]关闭捕获，全部用户断开")
 }

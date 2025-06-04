@@ -34,3 +34,4 @@ uninstall.exe
 .gitignore
 lqmy-desk.exe
 output.txt
+src-tauri/ffmpeg/*

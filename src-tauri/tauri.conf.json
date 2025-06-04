@@ -31,6 +31,13 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "resources": [
+        "ffmpeg/bin/avcodec-62.dll",
+        "ffmpeg/bin/avformat-62.dll",
+        "ffmpeg/bin/avutil-60.dll",
+        "ffmpeg/bin/swscale-9.dll",
+        "ffmpeg/bin/swresample-6.dll"
+      ]
   }
 }

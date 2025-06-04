@@ -1,12 +1,11 @@
 use crate::client::{PENDING, SEND_NOTIFY};
 use crate::config::{CURRENT_USERS_INFO, GLOBAL_STREAM_MANAGER, ICE_BUFFER, PEER_CONNECTION, UUID};
 use crate::input_executor::input::decode_and_dispatch;
-use crate::video_capturer::assembly::QualityConfig;
-
-use actix_web::web;
+use crate::video_capturer::ffmpeg::*;
 
 use enigo::{Enigo, Settings};
 use futures_util::FutureExt;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::mpsc::unbounded_channel;
@@ -263,15 +262,11 @@ pub async fn handle_webrtc_offer(offer: &JWTOfferRequest) -> AnswerResponse {
                         println!("[WEBRTC]启动视频失败，{:?}", e)
                     };
                     let q = select_mode(&mode3, &client_uuid3);
-                    let _sd_rx = GLOBAL_STREAM_MANAGER
-                        .read()
-                        .await
-                        .add_quality_stream(q)
-                        .await;
+
                     if let Err(e) = GLOBAL_STREAM_MANAGER
                         .read()
                         .await
-                        .add_webrtc_track(&client_uuid3, video_track2)
+                        .add_webrtc_track(&client_uuid3, video_track2, q)
                         .await
                     {
                         println!("[WEBRTC]写入track失败，{:?}", e)
@@ -286,12 +281,15 @@ pub async fn handle_webrtc_offer(offer: &JWTOfferRequest) -> AnswerResponse {
                     } else {
                         println!("[RTC]被动关闭{:?}的连接", client_uuid3)
                     }
-                    GLOBAL_STREAM_MANAGER
-                        .read()
+                    if let Err(e) = GLOBAL_STREAM_MANAGER
+                        .write()
                         .await
-                        .close_track_write(&client_uuid3)
-                        .await;
-                    GLOBAL_STREAM_MANAGER.write().await.check_shutdown().await;
+                        .remove_track(&client_uuid3)
+                        .await
+                    {
+                        println!("[FFMPEG]关闭失败 {:?}", e)
+                    };
+                    // GLOBAL_STREAM_MANAGER.write().await.check_shutdown().await;
                     //end_screen_capture(false);
                 });
             } else if state == RTCPeerConnectionState::Disconnected {
@@ -308,12 +306,15 @@ pub async fn handle_webrtc_offer(offer: &JWTOfferRequest) -> AnswerResponse {
                     } else {
                         println!("[RTC]被动关闭{:?}的连接", client_uuid3)
                     };
-                    GLOBAL_STREAM_MANAGER
-                        .read()
+                    if let Err(e) = GLOBAL_STREAM_MANAGER
+                        .write()
                         .await
-                        .close_track_write(&client_uuid3)
-                        .await;
-                    GLOBAL_STREAM_MANAGER.write().await.check_shutdown().await;
+                        .remove_track(&client_uuid3)
+                        .await
+                    {
+                        println!("[FFMPEG]关闭失败 {:?}", e)
+                    };
+                    // GLOBAL_STREAM_MANAGER.write().await.check_shutdown().await;
                     //end_screen_capture(false);
                 });
             }
@@ -442,11 +443,14 @@ pub async fn close_peerconnection(client_uuid: &str) {
 
     // Now work with the cloned Arc outside the mutex
     if let Some(pc) = pc_option {
-        GLOBAL_STREAM_MANAGER
-            .read()
+        if let Err(e) = GLOBAL_STREAM_MANAGER
+            .write()
             .await
-            .close_track_write(client_uuid)
-            .await;
+            .remove_track(client_uuid)
+            .await
+        {
+            println!("[FFMPEG]删除失败{:?}", e)
+        };
         if let Err(e) = pc.close().await {
             println!("[CLOSE PC]指定用户的RTC关闭失败，{:?},{:?}", e, client_uuid);
             return;
@@ -465,12 +469,28 @@ pub async fn close_peerconnection(client_uuid: &str) {
         println!("[CLOSE PC]指定用户的RTC连接不存在{:?}", client_uuid);
     }
 }
-fn select_mode(mode: &str, client_uuid: &str) -> QualityConfig {
+fn select_mode(mode: &str, _client_uuid: &str) -> EncodingParams {
     let res = match mode {
-        "low" => QualityConfig::new(client_uuid, 320, 240, 10000, 30),
-        "high" => QualityConfig::new(client_uuid, 1920, 1080, 500000, 30),
-        _ => QualityConfig::new(client_uuid, 1280, 720, 100000, 30),
+        "low" => EncodingParams {
+            width: 640,
+            height: 480,
+            fps: 30,
+            bitrate: 2000000,
+        },
+
+        "high" => EncodingParams {
+            width: 1920,
+            height: 1080,
+            fps: 30,
+            bitrate: 4000000,
+        },
+        _ => EncodingParams {
+            width: 1280,
+            height: 720,
+            fps: 30,
+            bitrate: 2000000,
+        },
     };
-    println!("{:?}", res);
+    //println!("{:?}", res);
     res
 }
