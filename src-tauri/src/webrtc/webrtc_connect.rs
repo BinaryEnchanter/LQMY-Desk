@@ -1,4 +1,5 @@
 use crate::client::{PENDING, SEND_NOTIFY};
+use crate::client_utils::current_user::{ControlMessage, ControllerCache};
 use crate::config::{CURRENT_USERS_INFO, GLOBAL_STREAM_MANAGER, ICE_BUFFER, PEER_CONNECTION, UUID};
 use crate::input_executor::input::decode_and_dispatch;
 use crate::video_capturer::ffmpeg::*;
@@ -8,7 +9,7 @@ use futures_util::FutureExt;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tokio::sync::mpsc::unbounded_channel;
+use tokio::sync::mpsc::{self, unbounded_channel};
 
 use std::sync::Arc;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
@@ -138,55 +139,120 @@ pub async fn handle_webrtc_offer(offer: &JWTOfferRequest) -> AnswerResponse {
 
     pc.add_track(video_track.clone()).await.unwrap();
     let clien_uuidd = client_uuid.clone();
-    let (tx, mut rx) = unbounded_channel::<serde_json::Value>();
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<ControlMessage>(1000);
     tokio::spawn(async move {
         let mut enigo = Enigo::new(&Settings::default()).unwrap();
-        while let Some(json_val) = rx.recv().await {
-            decode_and_dispatch(&mut enigo, &json_val);
+        let mut message_buffer = Vec::with_capacity(50);
+        let mut last_process = Instant::now();
+
+        while let Some(msg) = rx.recv().await {
+            message_buffer.push(msg);
+
+            // 批量处理逻辑：缓冲区满或超时
+            let should_process =
+                message_buffer.len() >= 20 || last_process.elapsed() > Duration::from_millis(16); // ~60fps
+
+            if should_process {
+                // 处理消息，对鼠标移动做去重
+                let mut processed_messages = Vec::new();
+                let mut last_mouse_move: Option<ControlMessage> = None;
+
+                for msg in message_buffer.drain(..) {
+                    match &msg {
+                        ControlMessage::MouseMove(_) => {
+                            // 只保留最后一个鼠标移动消息
+                            last_mouse_move = Some(msg);
+                        }
+                        _ => {
+                            // 先处理积累的鼠标移动
+                            if let Some(mouse_msg) = last_mouse_move.take() {
+                                processed_messages.push(mouse_msg);
+                            }
+                            processed_messages.push(msg);
+                        }
+                    }
+                }
+
+                // 处理剩余的鼠标移动
+                if let Some(mouse_msg) = last_mouse_move {
+                    processed_messages.push(mouse_msg);
+                }
+
+                // 执行控制操作
+                for msg in processed_messages {
+                    match msg {
+                        ControlMessage::MouseMove(json) => decode_and_dispatch(&mut enigo, &json),
+                        ControlMessage::MouseClick(json) => decode_and_dispatch(&mut enigo, &json),
+                        ControlMessage::KeyPress(json) => decode_and_dispatch(&mut enigo, &json),
+                        ControlMessage::Other(json) => decode_and_dispatch(&mut enigo, &json),
+                    }
+                }
+
+                last_process = Instant::now();
+            }
         }
     });
-    // 6. DataChannel 信令与重协商：
-    //    监听远端新建的 DataChannel，收到消息后交给 decode_and_dispatch 去执行
+
+    // 4. 优化的DataChannel处理
     pc.on_data_channel(Box::new({
-        let uuiddd = clien_uuidd.clone(); // 控制权限检查
-        let tx = tx.clone(); // 转发通道
+        let uuid = clien_uuidd.clone();
+        let tx = tx.clone();
         move |dc: Arc<RTCDataChannel>| {
             println!("[WEBRTC] 收到远端 DataChannel: label = {}", dc.label());
 
             dc.on_message(Box::new({
-                let uuidddd = uuiddd.clone();
+                let uuid = uuid.clone();
                 let tx = tx.clone();
                 move |msg| {
                     let data = msg.data.clone();
-                    let uuiddddd = uuidddd.clone();
+                    let uuid = uuid.clone();
                     let tx = tx.clone();
-                    async move {
-                        if !CURRENT_USERS_INFO
-                            .read()
-                            .await
-                            .is_controller_by_uuid(uuiddddd)
-                        {
+
+                    // 立即返回，避免阻塞WebRTC事件循环
+                    tokio::spawn(async move {
+                        // 使用本地缓存减少全局锁竞争
+                        static mut CACHE: Option<ControllerCache> = None;
+                        let cache = unsafe {
+                            if CACHE.is_none() {
+                                CACHE = Some(ControllerCache::new(uuid.clone()));
+                            }
+                            CACHE.as_mut().unwrap()
+                        };
+
+                        // 权限检查
+                        if !cache.check_and_update().await {
                             return;
                         }
 
-                        match std::str::from_utf8(&data) {
-                            Ok(text) => {
-                                println!("[DEBUG] 收到消息文本: {}", text);
-                                if let Ok(json_val) =
-                                    serde_json::from_str::<serde_json::Value>(text)
-                                {
-                                    // ✅ 推送给 Enigo 控制线程
-                                    if let Err(e) = tx.send(json_val) {
-                                        eprintln!("[ENIGO] 控制消息发送失败: {:?}", e);
+                        // 快速解析和分发
+                        if let Ok(text) = std::str::from_utf8(&data) {
+                            if let Ok(json_val) = serde_json::from_str::<Value>(text) {
+                                let control_msg = ControlMessage::from_json(json_val);
+
+                                // 使用try_send避免阻塞
+                                match tx.try_send(control_msg.clone()) {
+                                    Ok(_) => {}
+                                    Err(mpsc::error::TrySendError::Full(_)) => {
+                                        // 通道满了，如果是可丢弃消息就丢弃
+                                        if control_msg.is_droppable() {
+                                            println!("[WARN] 丢弃鼠标移动消息，通道已满");
+                                        } else {
+                                            // 重要消息，等待发送
+                                            if let Err(e) = tx.send(control_msg).await {
+                                                eprintln!("[ERROR] 重要消息发送失败: {:?}", e);
+                                            }
+                                        }
                                     }
-                                } else {
-                                    eprintln!("[WEBRTC] JSON 解析失败");
+                                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                                        eprintln!("[ERROR] 控制消息通道已关闭");
+                                        return;
+                                    }
                                 }
                             }
-                            Err(_) => eprintln!("[WEBRTC] 收到非 UTF-8 文本"),
                         }
-                    }
-                    .boxed()
+                    });
+
+                    Box::pin(async {})
                 }
             }));
 
@@ -390,7 +456,7 @@ pub fn send_ice_candidate(candi: RTCIceCandidateInit) -> CandidateResponse {
     CandidateResponse { candidates: candi }
 }
 
-use tokio::time::{interval, Duration};
+use tokio::time::{interval, Duration, Instant};
 use webrtc::peer_connection::RTCPeerConnection;
 
 pub fn monitor_video_send_stats(pc: Arc<RTCPeerConnection>) {
@@ -471,18 +537,18 @@ pub async fn close_peerconnection(client_uuid: &str) {
 }
 fn select_mode(mode: &str, _client_uuid: &str) -> EncodingParams {
     let res = match mode {
-        "low" => EncodingParams {
-            width: 640,
-            height: 480,
-            fps: 30,
-            bitrate: 2000000,
+        "high" => EncodingParams {
+            width: 2560,
+            height: 1440,
+            fps: 60,
+            bitrate: 20000000,
         },
 
-        "high" => EncodingParams {
+        "low" => EncodingParams {
             width: 1920,
             height: 1080,
-            fps: 30,
-            bitrate: 4000000,
+            fps: 60,
+            bitrate: 10000000,
         },
         _ => EncodingParams {
             width: 1280,

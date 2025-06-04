@@ -8,9 +8,12 @@ mod config;
 mod input_executor;
 mod video_capturer;
 mod webrtc;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
+use std::{
+    env,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
 };
 
 use client::CLOSE_NOTIFY;
@@ -169,6 +172,13 @@ async fn main() {
         use std::os::windows::io::AsRawHandle;
         use std::process::Command;
     }
+    let mut exe_path = env::current_exe().expect("Failed to get current exe path");
+    exe_path.pop(); // 移除exe文件名，保留目录
+
+    // 添加到 PATH 环境变量
+    let path_env = env::var("PATH").unwrap_or_default();
+    let new_path = format!("{};{}", exe_path.display(), path_env);
+    env::set_var("PATH", new_path);
     tauri::Builder::default()
         .on_window_event(|_window, event| {
             match event {

@@ -1,10 +1,12 @@
+use std::time::{Duration, Instant};
+
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::{
     client::{PENDING, SEND_NOTIFY},
     client_utils::{dialog::show_confirmation_dialog, user_manager::get_user_by_serial},
-    config::UUID,
+    config::{CURRENT_USERS_INFO, UUID},
 };
 
 use super::user_manager::UserType;
@@ -179,3 +181,64 @@ pub struct CrtlAns {
 //         curusers.set_ptr_by_serial(&controlreq.device_serial);
 //     }
 // }
+
+#[derive(Debug, Clone)]
+pub enum ControlMessage {
+    MouseMove(Value),
+    MouseClick(Value),
+    KeyPress(Value),
+    Other(Value),
+}
+
+impl ControlMessage {
+    pub fn from_json(json: Value) -> Self {
+        // 根据消息类型分类
+        if let Some(msg_type) = json.get("type").and_then(|t| t.as_str()) {
+            match msg_type {
+                "mouse_move" => Self::MouseMove(json),
+                "mouse_click" => Self::MouseClick(json),
+                "key_press" => Self::KeyPress(json),
+                _ => Self::Other(json),
+            }
+        } else {
+            Self::Other(json)
+        }
+    }
+
+    pub fn is_droppable(&self) -> bool {
+        // 鼠标移动消息可以丢弃，其他消息保证送达
+        matches!(self, Self::MouseMove(_))
+    }
+}
+
+// 2. 权限检查缓存
+pub struct ControllerCache {
+    pub uuid: String,
+    pub is_controller: bool,
+    pub last_check: Instant,
+}
+
+impl ControllerCache {
+    pub fn new(uuid: String) -> Self {
+        Self {
+            uuid,
+            is_controller: false,
+            last_check: Instant::now() - Duration::from_secs(1), // 强制首次检查
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.last_check.elapsed() < Duration::from_millis(200) // 200ms缓存
+    }
+
+    pub async fn check_and_update(&mut self) -> bool {
+        if !self.is_valid() {
+            self.is_controller = CURRENT_USERS_INFO
+                .read()
+                .await
+                .is_controller_by_uuid(self.uuid.clone());
+            self.last_check = Instant::now();
+        }
+        self.is_controller
+    }
+}
