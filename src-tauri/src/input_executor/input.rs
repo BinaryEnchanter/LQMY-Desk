@@ -1,6 +1,8 @@
 use enigo::{Axis, Button, Coordinate, Direction, Enigo, Key, Keyboard, Mouse, Settings};
 use serde_json::Value;
 
+use crate::log_println;
+
 // 将字符串形式的“按键名”映射到 enigo::Key 枚举。
 fn map_key(key_str: &str) -> Option<Key> {
     match key_str.to_lowercase().as_str() {
@@ -264,7 +266,7 @@ pub fn decode_mouse_event(enigo: &mut Enigo, json: &Value) {
                     }
 
                     other => {
-                        eprintln!("[decode_mouse_event] 未知 touchpad 事件: {}", other);
+                        log_println!("[decode_mouse_event] 未知 touchpad 事件: {}", other);
                     }
                 }
             }
@@ -363,7 +365,7 @@ pub fn decode_mouse_event(enigo: &mut Enigo, json: &Value) {
         }
 
         other => {
-            eprintln!("[decode_mouse_event] 未知鼠标命令: {}", other);
+            log_println!("[decode_mouse_event] 未知鼠标命令: {}", other);
         }
     }
 }
@@ -391,7 +393,7 @@ pub fn decode_keyboard_event(enigo: &mut Enigo, json: &Value) {
                 if let Some(k) = map_key(kstr) {
                     let _ = enigo.key(k, Direction::Press);
                 } else {
-                    eprintln!("[decode_keyboard_event] 未知 key_down 键名: {}", kstr);
+                    log_println!("[decode_keyboard_event] 未知 key_down 键名: {}", kstr);
                 }
             }
         }
@@ -401,7 +403,7 @@ pub fn decode_keyboard_event(enigo: &mut Enigo, json: &Value) {
                 if let Some(k) = map_key(kstr) {
                     let _ = enigo.key(k, Direction::Release);
                 } else {
-                    eprintln!("[decode_keyboard_event] 未知 key_up 键名: {}", kstr);
+                    log_println!("[decode_keyboard_event] 未知 key_up 键名: {}", kstr);
                 }
             }
         }
@@ -421,7 +423,7 @@ pub fn decode_keyboard_event(enigo: &mut Enigo, json: &Value) {
                         if let Some(k) = map_key(kstr) {
                             let _ = enigo.key(k, Direction::Press);
                         } else {
-                            eprintln!("[decode_keyboard_event] 未知组合键 键名: {}", kstr);
+                            log_println!("[decode_keyboard_event] 未知组合键 键名: {}", kstr);
                         }
                     }
                 }
@@ -437,11 +439,33 @@ pub fn decode_keyboard_event(enigo: &mut Enigo, json: &Value) {
         }
 
         other => {
-            eprintln!("[decode_keyboard_event] 未知键盘命令: {}", other);
+            log_println!("[decode_keyboard_event] 未知键盘命令: {}", other);
         }
     }
 }
 
+pub fn decode_joystick_event(enigo: &mut Enigo, json: &Value) {
+    let cmd_lower = json
+        .get("cmd")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_lowercase())
+        .or_else(|| {
+            json.get("type")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_lowercase())
+        });
+
+    let cmd = match cmd_lower {
+        Some(c) => c,
+        None => return,
+    };
+    match cmd.as_str() {
+        "joystick" => {}
+        other => {
+            log_println!("[decode_keyboard_event] 未知键盘命令: {}", other);
+        }
+    }
+}
 // 主入口：根据 JSON 中的 “type” 或 “cmd” 字段，将事件分派到鼠标或键盘解码
 pub fn decode_and_dispatch(enigo: &mut Enigo, json: &Value) {
     if let Some(typ) = json.get("type").and_then(|v| v.as_str()) {
@@ -469,7 +493,7 @@ pub fn decode_and_dispatch(enigo: &mut Enigo, json: &Value) {
         } else if lowercase.starts_with("pan") {
             decode_mouse_event(enigo, json);
         } else {
-            eprintln!("[decode_and_dispatch] 未知 type: {}", typ);
+            log_println!("[decode_and_dispatch] 未知 type: {}", typ);
         }
     } else if let Some(cmd) = json.get("cmd").and_then(|v| v.as_str()) {
         let lowercase = cmd.to_lowercase();
@@ -478,13 +502,13 @@ pub fn decode_and_dispatch(enigo: &mut Enigo, json: &Value) {
         } else if lowercase.starts_with("key") {
             decode_keyboard_event(enigo, json);
         } else {
-            eprintln!(
+            log_println!(
                 "[decode_and_dispatch] 无法判定 cmd 属于 mouse 还是 keyboard: {}",
                 cmd
             );
         }
     } else {
-        eprintln!(
+        log_println!(
             "[decode_and_dispatch] JSON 中既没有 type 也没有 cmd 字段: {}",
             json
         );

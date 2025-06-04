@@ -338,7 +338,7 @@ pub fn convert_bgra_to_yuv420(
             return unsafe { convert_bgra_to_yuv420_avx2(bgra, src_width, src_height, yuv) };
         }
     }
-    println!("[YUV]avx2检测");
+    log_println!("[YUV]avx2检测");
     // 回退到标准实现
     convert_bgra_to_yuv420_standard(bgra, src_width, src_height, yuv)
 }
@@ -850,7 +850,7 @@ impl MultiStreamManager {
                                     // 跳帧，正常情况
                                 }
                                 Err(e) => {
-                                    eprintln!("Encoding error for {}: {}", quality_name, e);
+                                    log_println!("Encoding error for {}: {}", quality_name, e);
                                 }
                             }
                         }
@@ -956,7 +956,7 @@ impl MultiStreamManager {
                         };
 
                         if let Err(e) = track.write_sample(&sample).await {
-                            eprintln!("Failed to write sample for {}: {}", quality_name, e);
+                            log_println!("Failed to write sample for {}: {}", quality_name, e);
                             break;
                         }
                     }
@@ -970,7 +970,7 @@ impl MultiStreamManager {
                     }
                 }
             }
-            println!("[TRACK WRITE]成功关闭")
+            log_println!("[TRACK WRITE]成功关闭")
         });
 
         Ok(())
@@ -996,7 +996,7 @@ impl MultiStreamManager {
         if let Some(track_shutdown) = shutdown_signal {
             track_shutdown.store(true, Ordering::Relaxed);
             self.remove_quality_stream(quality_name).await;
-            println!("[CLOSE TRACK]关闭")
+            log_println!("[CLOSE TRACK]关闭")
         }
     }
     /// 获取活跃的质量配置

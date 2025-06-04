@@ -3,6 +3,7 @@ use super::dialog::show_confirmation_dialog;
 use super::user_manager::UserType;
 use crate::client_utils::user_manager::{add_device, get_user_by_serial};
 use crate::config::{CONFIG, CURRENT_USERS_INFO, JWT_KEY, THIS_TIME};
+use crate::log_println;
 
 use chrono;
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
@@ -46,7 +47,7 @@ pub async fn authenticate(info: AuthRequest) -> AuthResponse {
     {
         let cur_users = CURRENT_USERS_INFO.read().await;
         if !cur_users.is_avail() {
-            println!(
+            log_println!(
                 "[SERVER_INFO]当前已连接设备上限,来自{:?}的连接请求直接拒绝",
                 info.device_name
             );
@@ -150,7 +151,7 @@ pub async fn authenticate(info: AuthRequest) -> AuthResponse {
         //新用户，验证成功则记录信息并返回jwt
         _ => {
             let stored_pw = CONFIG.lock().await.connection_password.clone();
-            println!("here");
+            log_println!("here");
             if stored_pw == info.password {
                 {
                     let mut confirming = CONFIRMING.lock().unwrap();
@@ -189,7 +190,7 @@ pub async fn authenticate(info: AuthRequest) -> AuthResponse {
                     CURRENT_USERS_INFO.write().await.add_new_cur_user(&userinfo);
                     let token = generate_jwt(&info.device_serial);
                     add_device(&info.device_name, &info.device_serial).await;
-                    println!("[AUTH_INFO]生成jwt{:?}", token);
+                    log_println!("[AUTH_INFO]生成jwt{:?}", token);
                     //HttpResponse::Ok().json(token)
                     AuthResponse {
                         status: "200".to_owned(),

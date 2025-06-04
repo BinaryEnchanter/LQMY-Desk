@@ -42,6 +42,7 @@ use crate::{
         password::generate_connection_password,
     },
     config::{update_uuid, CONFIG, CURRENT_USERS_INFO, UUID},
+    log_println,
     webrtc::webrtc_connect::{
         close_peerconnection, flush_buffered_ice, JWTCandidateRequest, JWTOfferRequest,
     },
@@ -54,11 +55,11 @@ lazy_static! {
 pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std::error::Error>> {
     let server_ws = CONFIG.lock().await.server_address.clone(); // ws:// 或 wss://
     generate_connection_password().await;
-    println!("[CLIENT] Connecting to {}...", server_ws);
+    log_println!("[CLIENT] Connecting to {}...", server_ws);
 
     let (response, mut connection) = Client::new().ws(&server_ws).connect().await?;
-    //println!("[CLIENT] Connected, status: {:?}", response.status());
-    println!("[CLIENT] Connected, status: {:?}", response.status());
+    //log_println!("[CLIENT] Connected, status: {:?}", response.status());
+    log_println!("[CLIENT] Connected, status: {:?}", response.status());
 
     // split Sink (for sending) and Stream (for receiving)
     //let (sink, mut stream) = connection.split();
@@ -93,20 +94,20 @@ pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std
                     let mut pending=PENDING.lock().unwrap();
                     while let Some(json) = pending.pop(){
                         connection.send(Message::Text(json.to_string().into())).await?;
-                        println!("[CLIENT]发送消息:{:?}",json);
+                        log_println!("[CLIENT]发送消息:{:?}",json);
 
                     }
-                    println!{"[CLIENT]pending应该为空{:?}",pending};
+                    log_println!{"[CLIENT]pending应该为空{:?}",pending};
                     drop(pending);
 
 
                 }
                 // 先检查退出
                 _ = CLOSE_NOTIFY.notified() => {
-                    println!("[CLIENT] Exit requested, sending close JSON");
+                    log_println!("[CLIENT] Exit requested, sending close JSON");
                     let close_json = json!({ "type": "close" });
                     if let Err(e) =  send_lock.lock(){
-                        println!("[CLIENT] send lock {:?}",e)
+                        log_println!("[CLIENT] send lock {:?}",e)
                     };
                     connection.send(Message::Text(close_json.to_string().into())).await?;
                     drop(send_lock.lock().unwrap());
@@ -117,7 +118,7 @@ pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std
                 _=interval.tick()=>{
                     if registered_flag
                     {
-                        //println!("[CLIENT] Ping");
+                        //log_println!("[CLIENT] Ping");
                         let uuid=UUID.read().await.clone();
                         let ping_json=json!({
                             "type":"ping",
@@ -125,7 +126,7 @@ pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std
                         });
                         drop(uuid);
                         if let Err(e) =  send_lock.lock(){
-                        println!("[CLIENT] send lock {:?}",e)
+                        log_println!("[CLIENT] send lock {:?}",e)
                     };
                         connection.send(Message::Text(ping_json.to_string().into())).await?;
                         drop(send_lock.lock().unwrap());
@@ -134,14 +135,14 @@ pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std
                     let now = Instant::now();
                     if now.duration_since(last_heartbeat)>PONG_TIMEOUT{
                         show_iknow_dialog("服务器断开", "请检查本地网络，或更换服务器").await;
-                        println!("[CLIENT]pong超时，last{:?},check time{:?}",last_heartbeat,now);
+                        log_println!("[CLIENT]pong超时，last{:?},check time{:?}",last_heartbeat,now);
                         return Ok(());
                     }
 
                 }
                 Some(Ok(frame)) = connection.next()=> {
                     // if exit_flag.load(Ordering::Relaxed) {
-                    //     println!(
+                    //     log_println!(
                     //         "[CLIENT] Exit requested, sending close frame,{:?}",
                     //         exit_flag
                     //     );
@@ -152,10 +153,10 @@ pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std
                     //         .send(Message::Text(json.to_string().into()))
                     //         .await{
                     //             Ok(ok)=>{
-                    //                 println!("[CLOSE FRAME SEND]Success{:?}",ok);
+                    //                 log_println!("[CLOSE FRAME SEND]Success{:?}",ok);
                     //             },
                     //             Err(e)=>{
-                    //                 println!("[CLOSE FRAME SEND]Failure{:?}",e);
+                    //                 log_println!("[CLOSE FRAME SEND]Failure{:?}",e);
                     //                 return Err(Box::new(e));
                     //             }
                     //         };
@@ -167,15 +168,15 @@ pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std
                         let v: Value = match serde_json::from_str(&txt_str) {
                             Ok(v) => v,
                             Err(e) => {
-                                eprintln!("[CLIENT] 非法的 JSON: {} ({})", txt_str, e);
+                                log_println!("[CLIENT] 非法的 JSON: {} ({})", txt_str, e);
                                 break;
                             }
                         };
-                        println!("[CLIENT]收到JSON{:?}", v);
+                        log_println!("[CLIENT]收到JSON{:?}", v);
                         let msg_type = match v.get("type").and_then(Value::as_str) {
                             Some(t) => t,
                             None => {
-                                eprintln!("[CLIENT] 找不到 type 字段: {}", txt_str);
+                                log_println!("[CLIENT] 找不到 type 字段: {}", txt_str);
                                 break;
                             }
                         };
@@ -191,7 +192,7 @@ pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std
                                         registered_flag=true;
                                     }
                                     None => {
-                                        eprintln!("[CLIENT] 找不到 uuid 字段: {}", txt_str);
+                                        log_println!("[CLIENT] 找不到 uuid 字段: {}", txt_str);
                                         break;
                                     }
                                 }
@@ -200,12 +201,12 @@ pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std
                                 let reason = v.get("reason").and_then(Value::as_str);
                                 match reason {
                                     Some(re) => {
-                                        println!("[CLIENT]服务器注册拒绝：{:?}", re);
+                                        log_println!("[CLIENT]服务器注册拒绝：{:?}", re);
                                         //服务器连接失败，需要修改前端连接状态为关闭
                                         todo!()
                                     }
                                     None => {
-                                        eprintln!("[CLIENT] 找不到 reason 字段: {}", txt_str);
+                                        log_println!("[CLIENT] 找不到 reason 字段: {}", txt_str);
                                         break;
                                     }
                                 }
@@ -214,7 +215,7 @@ pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std
                                 let msg = serde_json::from_str::<ServerMessage>(&txt_str).unwrap();
                                 if let Ok(p) = serde_json::from_str::<PayloadWithCmd>(msg.payload.clone().as_str().unwrap())
                                 {
-                                    //println!("[message]payload {:?}",p);
+                                    //log_println!("[message]payload {:?}",p);
                                     match p.cmd.as_str() {
                                         "auth" => {
                                             // let authreq=json!(AuthRequest{ device_name: p.data.get("device_name").and_then(Value::as_str).unwrap().to_string(),
@@ -225,7 +226,7 @@ pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std
                                             if let Ok(auth_req) =
                                                 serde_json::from_str::<AuthRequest>(p.data.as_str().unwrap())
                                             {
-                                                //println!("[message]payload value {:?}",auth_req);
+                                                //log_println!("[message]payload value {:?}",auth_req);
                                                 tokio::spawn(async move{
 
                                                     let result =
@@ -248,7 +249,7 @@ pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std
                                                     //     .send(Message::Text(reply.to_string().into()))
                                                     //     .await;
                                                     // drop(send_lock);
-                                                    println!("[CLIENT]认证返回：{:?}",reply)
+                                                    log_println!("[CLIENT]认证返回：{:?}",reply)
                                                 });
 
                                             }
@@ -257,12 +258,12 @@ pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std
                                             if let Ok(jwt_offer_req)=
                                                 serde_json::from_str::<JWTOfferRequest>(p.data.as_str().unwrap())
                                             {
-                                                //println!("[message]payload value {:?}",jwt_offer_req);
+                                                //log_println!("[message]payload value {:?}",jwt_offer_req);
                                                 if !validate_jwt(&jwt_offer_req.jwt){
-                                                    println!("[OFFER_HANDLER]来自{:?}的JWT验证失败",msg.from);
+                                                    log_println!("[OFFER_HANDLER]来自{:?}的JWT验证失败",msg.from);
                                                     break;
                                                 }
-                                                //println!("[message]payload value {:?}",offer_req);
+                                                //log_println!("[message]payload value {:?}",offer_req);
                                                 tokio::spawn(async move{
                                                     let client_uuid=jwt_offer_req.client_uuid.clone();
                                                     let res=crate::webrtc::webrtc_connect::handle_webrtc_offer(&jwt_offer_req).await;
@@ -282,7 +283,7 @@ pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std
                                                         pending.push(reply.clone());
                                                         drop(pending);
                                                         SEND_NOTIFY.notify_one();
-                                                        println!("[CLIENT]RTC返回Answear：{:?}",reply);
+                                                        log_println!("[CLIENT]RTC返回Answear：{:?}",reply);
                                                     }
                                                     flush_buffered_ice(&client_uuid).await
                                                     // 发送ICE
@@ -301,11 +302,11 @@ pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std
                                                     // pending.push(reply.clone());
                                                     // drop(pending);
                                                     // SEND_NOTIFY.notify_one();
-                                                    // println!("[CLIENT]RTC返回ICE：{:?}",reply);
+                                                    // log_println!("[CLIENT]RTC返回ICE：{:?}",reply);
                                                 });
 
                                             }else {
-                                                println!("[CLIENT]OFFER解析失败")
+                                                log_println!("[CLIENT]OFFER解析失败")
                                             }
                                         }
                                         "candidate"=>{
@@ -313,7 +314,7 @@ pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std
                                                 serde_json::from_str::<JWTCandidateRequest>(p.data.as_str().unwrap())
                                             {
                                                 if !validate_jwt(&candidate_req.jwt){
-                                                    println!("[CNADIDATE_HANDLER]来自{:?}的JWT验证失败",msg.from);
+                                                    log_println!("[CNADIDATE_HANDLER]来自{:?}的JWT验证失败",msg.from);
                                                     break;
                                                 }
                                                 let res=crate::webrtc::webrtc_connect::handle_ice_candidate(candidate_req).await;
@@ -332,19 +333,19 @@ pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std
                                                 // drop(pending);
                                                 // SEND_NOTIFY.notify_one();
 
-                                                println!("[CLIENT]接受对方Candidate：{:?}",res);
+                                                log_println!("[CLIENT]接受对方Candidate：{:?}",res);
                                             }
                                         }
                                         "disconnect"=>{
                                              if let Ok(disconnect_req)=
                                                 serde_json::from_str::<DisconnectReq>(p.data.as_str().unwrap())
                                                 {
-                                                    println!("[message]payload value {:?}",disconnect_req);
+                                                    log_println!("[message]payload value {:?}",disconnect_req);
                                                     tokio::spawn(async move{
                                                     //let res=crate::webrtc::webrtc_connect::handle_webrtc_offer(web::Json(disconnect_req)).await;
                                                         // JWT验证
                                                         if !disconnect_req.verify(){
-                                                            println!("[DISCONNECT]JWT 验证失败")
+                                                            log_println!("[DISCONNECT]JWT 验证失败")
 
                                                         }else {
 
@@ -361,7 +362,7 @@ pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std
                                                     // JWT验证
                                                     let body:String;
                                                     let status =if !validate_jwt(&control_req.jwt)||CURRENT_USERS_INFO.read().await.has_controller(){
-                                                        println!("[CONTROL]已有控制者");
+                                                        log_println!("[CONTROL]已有控制者");
                                                         body="已有控制者".to_string();
                                                         "400"
 
@@ -412,7 +413,7 @@ pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std
                                                     // JWT验证
 
                                                     if !validate_jwt(&control_req.jwt){
-                                                        println!("[CLOSE RTC]JWT验证失败");
+                                                        log_println!("[CLOSE RTC]JWT验证失败");
                                                        };
                                                     close_peerconnection(&control_req.uuid).await;
                                                     CURRENT_USERS_INFO.write().await.revoke_control().await;
@@ -420,22 +421,22 @@ pub async fn start_client(_exit_flag: Arc<AtomicBool>) -> Result<(), Box<dyn std
                                             }
                                         }
 
-                                        _ => println!("[CLIENT] Unknown cmd: {}", p.cmd),
+                                        _ => log_println!("[CLIENT] Unknown cmd: {}", p.cmd),
                                     }
                                 }
                             }
                             "pong"=>{
                                 last_heartbeat=Instant::now();
-                                //println!("[CLIENT]pong!")
+                                //log_println!("[CLIENT]pong!")
                             }
-                            other => println!("[CLIENT] Unknown message type: {}", other),
+                            other => log_println!("[CLIENT] Unknown message type: {}", other),
                         }
                     }
                     Frame::Ping(msg) => {
                         connection.send(Message::Pong(msg)).await?;
                     }
                     Frame::Close(reason) => {
-                        println!("[CLIENT] Connection closed: {:?}", reason);
+                        log_println!("[CLIENT] Connection closed: {:?}", reason);
                         return Ok(());
                     }
                     _ => {}

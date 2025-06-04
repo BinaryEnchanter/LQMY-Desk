@@ -2,6 +2,7 @@ use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 
 use crate::config::get_userinfo_path;
+use crate::log_println;
 
 use super::dialog::show_confirmation_dialog;
 use std::collections::HashMap;
@@ -33,10 +34,10 @@ lazy_static! {
 /// 读取本地存储的设备信息
 fn load_devices() -> HashMap<String, UserInfo> {
     if let Ok(data) = fs::read_to_string(get_userinfo_path()) {
-        println!("[USER_LIST:成功从{:?}读取用户信息]", get_userinfo_path());
+        log_println!("[USER_LIST:成功从{:?}读取用户信息]", get_userinfo_path());
         serde_json::from_str(&data).unwrap_or_else(|_| HashMap::new())
     } else {
-        println!("[USER_LIST:路径下没有json文件,用户信息表初始化为空]");
+        log_println!("[USER_LIST:路径下没有json文件,用户信息表初始化为空]");
         HashMap::new()
     }
 }
@@ -60,7 +61,7 @@ pub async fn add_device(device_name: &str, device_id: &str) {
     {
         let mut devices = USER_LIST.lock().unwrap();
         if devices.contains_key(device_id) {
-            println!("[USER_LIST:该设备信息已存在，无法再次添加]");
+            log_println!("[USER_LIST:该设备信息已存在，无法再次添加]");
             return;
         }
         devices.insert(
@@ -73,7 +74,7 @@ pub async fn add_device(device_name: &str, device_id: &str) {
         );
     }
     save_devices();
-    println!("[USER_LIST:已添加设备{:?}到普通用户]", device_name);
+    log_println!("[USER_LIST:已添加设备{:?}到普通用户]", device_name);
 }
 
 #[derive(Debug, Serialize)]
@@ -125,18 +126,19 @@ pub async fn update_user_category(serial: String, usertype: String) {
             "regular" => UserType::Normal,
             "blacklist" => UserType::Blacklist,
             _ => {
-                println!("[USER INFO]未定义的用户类型{:?}", &usertype);
+                log_println!("[USER INFO]未定义的用户类型{:?}", &usertype);
                 return;
             }
         };
 
-        println!(
+        log_println!(
             "[USER LIST]成功更新用户{:?}类型为'{:?}'",
-            user.device_id, user.user_type
+            user.device_id,
+            user.user_type
         );
         Ok(())
     } else {
-        println!("[USER LIST]更新用户类型失败");
+        log_println!("[USER LIST]更新用户类型失败");
         Err(())
     };
     drop(users);
@@ -149,8 +151,8 @@ pub async fn delete_user(serial: String) {
     drop(users);
     if let Some(rem) = removed {
         save_devices();
-        println!("[USER_INFO]用户信息{:?}删除", rem)
+        log_println!("[USER_INFO]用户信息{:?}删除", rem)
     } else {
-        println!("[USER_INFO]设备{:?}不存在，删除失败", &serial)
+        log_println!("[USER_INFO]设备{:?}不存在，删除失败", &serial)
     }
 }

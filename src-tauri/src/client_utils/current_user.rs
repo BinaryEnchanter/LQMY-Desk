@@ -7,6 +7,7 @@ use crate::{
     client::{PENDING, SEND_NOTIFY},
     client_utils::{dialog::show_confirmation_dialog, user_manager::get_user_by_serial},
     config::{CURRENT_USERS_INFO, UUID},
+    log_println,
 };
 
 use super::user_manager::UserType;
@@ -71,9 +72,9 @@ impl CurUsersInfo {
     pub fn add_new_cur_user(&mut self, new_user: &CurInfo) {
         if self.usersinfo.len() < self.max {
             self.usersinfo.push(new_user.clone());
-            println!("[CONFIG]成功添加新的用户信息：{:?}", new_user)
+            log_println!("[CONFIG]成功添加新的用户信息：{:?}", new_user)
         } else {
-            println!("[CONFIG]失败添加新的用户信息：{:?}", new_user)
+            log_println!("[CONFIG]失败添加新的用户信息：{:?}", new_user)
         }
     }
 
@@ -109,10 +110,10 @@ impl CurUsersInfo {
         }
         if target < self.usersinfo.len() {
             let removed = self.usersinfo.swap_remove(target);
-            println!("[CURUSER]连接用户信息删除：{:?}", removed);
+            log_println!("[CURUSER]连接用户信息删除：{:?}", removed);
             true
         } else {
-            println!("[CURUSER]连接用户信息删除失败：{:?}", uuid);
+            log_println!("[CURUSER]连接用户信息删除失败：{:?}", uuid);
             false
         }
     }

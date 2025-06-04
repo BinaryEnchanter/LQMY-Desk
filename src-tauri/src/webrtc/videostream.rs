@@ -68,10 +68,10 @@ pub async fn start_webrtc_video_stream_on_pc(
     //             // let mut packet_buf = BytesMut::from(&buf[..size]);
     //             // if let Ok(pkt) = Packet::unmarshal(&mut packet_buf) {
     //             //     // StaticRTP 提供了 write_rtp
-    //             //     //println!("[RTP] Write RTP packet: {} bytes", pkt.marshal_size());
+    //             //     //log_println!("[RTP] Write RTP packet: {} bytes", pkt.marshal_size());
     //             //     //let res = video_track.write_rtp(&pkt).await;
-    //             //     //println!("[RTP]videotrack write {:?}", res);
-    //             //     //println!("[RTP] Sending RTP packet size{:?}", size);
+    //             //     //log_println!("[RTP]videotrack write {:?}", res);
+    //             //     //log_println!("[RTP] Sending RTP packet size{:?}", size);
     //             //     // let mut out_buf = vec![0u8; 1500];
 
     //             //     let sample = Sample {
@@ -80,9 +80,9 @@ pub async fn start_webrtc_video_stream_on_pc(
     //             //         ..Default::default()
     //             //     };
     //             //      let _res = video_track.write_sample(&sample).await;
-    //             //     //println!("[VIDEOTRACK]写入RTC:{:?}", res)
+    //             //     //log_println!("[VIDEOTRACK]写入RTC:{:?}", res)
     //             // } else {
-    //             //     println!("[VIDEOSTREAM]packet_buf{:?}", packet_buf)
+    //             //     log_println!("[VIDEOSTREAM]packet_buf{:?}", packet_buf)
     //             // }
 
     //             let nalu = &buf[..size];
@@ -92,14 +92,14 @@ pub async fn start_webrtc_video_stream_on_pc(
     //                 ..Default::default()
     //             };
     //             if let Err(err) = video_track.write_sample(&sample).await {
-    //                 eprintln!("[H264Sample] write_sample err: {}", err);
+    //                 log_println!("[H264Sample] write_sample err: {}", err);
     //             }
     //         } else {
-    //             println!("[VIDEOSTREAM]packet_buf{:?}", buf)
+    //             log_println!("[VIDEOSTREAM]packet_buf{:?}", buf)
     //         }
     //     }
     // });
 
-    // println!("[VIDEOTRACK] 启动 UDP→WebRTC 推流 @{}", udp_port);
+    // log_println!("[VIDEOTRACK] 启动 UDP→WebRTC 推流 @{}", udp_port);
     //Ok(())
 }

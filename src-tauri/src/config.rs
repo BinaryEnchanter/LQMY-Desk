@@ -11,6 +11,7 @@ use webrtc::peer_connection::RTCPeerConnection;
 
 use crate::client_utils::current_user::CurUsersInfo;
 use crate::client_utils::user_manager::{UserInfo, UserType};
+use crate::log_println;
 use crate::video_capturer::ffmpeg::MultiStreamManager;
 pub const NO_CONNECTION_INDENTIFIER: &str = "!@#$%^&*()";
 // 存储全局信息的结构体
@@ -88,7 +89,7 @@ fn generate_jwt_key() -> String {
 //     cur_user.device_id = info.device_serial.clone();
 //     cur_user.device_name = info.device_name.clone();
 //     cur_user.user_type = usertype;
-//     println!(
+//     log_println!(
 //         "[SERVER_INFO]连接用户信息更新：设备名：{:?}，设备序列号：{:?}，用户类型：{:?}",
 //         cur_user.device_name, cur_user.device_id, cur_user.user_type
 //     );
@@ -100,7 +101,7 @@ fn generate_jwt_key() -> String {
 //     cur_user.device_id = NO_CONNECTION_INDENTIFIER.to_string();
 //     cur_user.device_name = "".to_string();
 //     cur_user.user_type = UserType::Normal;
-//     println!(
+//     log_println!(
 //         "[SERVER_INFO]连接用户信息重置为：设备名：{:?}，设备序列号：{:?}，用户类型：{:?}",
 //         cur_user.device_name, cur_user.device_id, cur_user.user_type
 //     );
@@ -109,13 +110,13 @@ fn generate_jwt_key() -> String {
 pub async fn update_uuid(uuid: &str) {
     let mut cur_uuid = UUID.write().await;
     *cur_uuid = uuid.to_string();
-    println!("[CLIENT]服务器分配的uuid：{:?}", *cur_uuid)
+    log_println!("[CLIENT]服务器分配的uuid：{:?}", *cur_uuid)
 }
 
 pub async fn update_server_addr(ipaddr: String) {
     let mut config = CONFIG.lock().await;
     config.server_address = ipaddr;
-    println!("[CLIENT]所连服务器信息改变为:{:?}", config.server_address);
+    log_println!("[CLIENT]所连服务器信息改变为:{:?}", config.server_address);
 }
 
 pub async fn reset_all_info() {
@@ -124,11 +125,11 @@ pub async fn reset_all_info() {
     let mut uuid = UUID.write().await;
     *uuid = "尚未连接服务器".to_string();
     CURRENT_USERS_INFO.write().await.reset();
-    println!("[CONFIG]口令、用户与UUID重置")
+    log_println!("[CONFIG]口令、用户与UUID重置")
 }
 
 // pub fn add_to_cur_user_vec(new_user: &UserInfo) {
 //     let mut cur_users_info = CURRENT_USERS_INFO.lock().unwrap();
 //     cur_users_info.usersinfo.push(new_user.clone());
-//     println!("[CONFIG]添加新连接用户信息：{:?}", new_user)
+//     log_println!("[CONFIG]添加新连接用户信息：{:?}", new_user)
 // }

@@ -1,4 +1,4 @@
-use crate::config::CONFIG;
+use crate::{config::CONFIG, log_println};
 use rand::{rng, Rng};
 
 /**
@@ -18,7 +18,7 @@ pub async fn generate_connection_password() {
     let password = generate_password().await;
     let mut config = CONFIG.lock().await;
     config.connection_password = password.clone();
-    println!("Generated connection password: {:?}", password); // 打印或将口令发送给电脑端
+    log_println!("Generated connection password: {:?}", password); // 打印或将口令发送给电脑端
 }
 
 /**

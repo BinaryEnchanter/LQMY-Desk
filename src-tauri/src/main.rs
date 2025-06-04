@@ -8,6 +8,10 @@ mod config;
 mod input_executor;
 mod video_capturer;
 mod webrtc;
+
+#[macro_use]
+mod macros;
+
 use std::{
     env,
     sync::{
@@ -22,11 +26,9 @@ use client_utils::{
     disconnect::disconnect_cur_user_by_uuid,
     user_manager::{delete_user, transfer_userinfo_to_vue, update_user_category, UserInfoString},
 };
-use config::{reset_all_info, CONFIG, CURRENT_USERS_INFO, GLOBAL_STREAM_MANAGER, UUID};
-use std::fs::File;
-use webrtc::webrtc_connect::close_peerconnection;
+use config::{reset_all_info, CONFIG, CURRENT_USERS_INFO, UUID};
 
-use crate::config::APPDATA_PATH;
+use webrtc::webrtc_connect::close_peerconnection;
 
 //use actix_web::{web, App, HttpServer, HttpResponse};
 //use tauri::Manager;
@@ -46,12 +48,12 @@ async fn start_server(state: tauri::State<'_, AppState>) -> Result<(), String> {
         is_running.store(true, Ordering::Relaxed);
         exit_flag.store(false, Ordering::Relaxed);
 
-        println!("[CLIENT] exit_flag: {:?}", exit_flag);
+        log_println!("[CLIENT] exit_flag: {:?}", exit_flag);
 
         let result = sys.block_on(async { client::start_client(exit_flag.clone()).await });
 
         if let Err(e) = result {
-            eprintln!("[CLIENT] start_client 出错: {}", e);
+            log_println!("[CLIENT] start_client 出错: {}", e);
         }
 
         is_running.store(false, Ordering::Relaxed);
@@ -74,7 +76,7 @@ async fn stop_server(state: tauri::State<'_, AppState>) -> Result<(), String> {
     state.is_running.store(false, Ordering::Relaxed);
     state.exit_flag.store(true, Ordering::Relaxed);
 
-    println!(
+    log_println!(
         "Exit flag set, client should shut down soon. {:?}",
         state.exit_flag
     );
@@ -84,7 +86,7 @@ async fn stop_server(state: tauri::State<'_, AppState>) -> Result<(), String> {
     // 重置全局信息
     reset_all_info().await;
 
-    println!("[SERVER_INFO: Server stopped.]");
+    log_println!("[SERVER_INFO: Server stopped.]");
 
     Ok(())
 }
@@ -94,10 +96,10 @@ async fn get_server_info(
 ) -> Result<(String, String, String, bool, CurUsersInfo), String> {
     let config = CONFIG.lock().await;
     let uuid = UUID.read().await.clone();
-    println!(
-        "[SERVER_INFO: Acquiring addr {:?} & password {:?} & uuid {:?}]",
-        config.server_address, config.connection_password, uuid
-    );
+    // log_println!(
+    //     "[SERVER_INFO: Acquiring addr {:?} & password {:?} & uuid {:?}]",
+    //     config.server_address, config.connection_password, uuid
+    // );
     //let cur_user = CURRENT_USER.lock().unwrap();
     let cur_users_info = CURRENT_USERS_INFO.read().await.clone();
     let is_running = state.is_running.load(Ordering::Relaxed).clone();
@@ -116,7 +118,7 @@ async fn get_server_info(
 #[tauri::command]
 async fn get_user_info() -> Vec<UserInfoString> {
     let vec = transfer_userinfo_to_vue().await;
-    println!("[USER LIST]传到VUE的用户信息为{:?}", vec);
+    log_println!("[USER LIST]传到VUE的用户信息为{:?}", vec);
     vec
 }
 #[tauri::command]
@@ -157,21 +159,21 @@ async fn shutdown_caputure() {
     drop(cur_users);
     //GLOBAL_STREAM_MANAGER.write().await.shutdown().await;
     CURRENT_USERS_INFO.write().await.reset();
-    println!("[SERVER]关闭捕获，全部用户断开")
+    log_println!("[SERVER]关闭捕获，全部用户断开")
 }
 
 static SHUTDOWN_CALLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 16)]
 async fn main() {
-    let path = APPDATA_PATH.lock().unwrap().join("output.txt");
-    let file = File::create(path).unwrap();
+    // let path = APPDATA_PATH.lock().unwrap().join("output.txt");
+    // let file = File::create(path).unwrap();
 
-    #[cfg(all(windows, not(debug_assertions)))]
-    {
-        use std::os::windows::io::AsRawHandle;
-        use std::process::Command;
-    }
+    // #[cfg(all(windows, not(debug_assertions)))]
+    // {
+    //     use std::os::windows::io::AsRawHandle;
+    //     use std::process::Command;
+    // }
     let mut exe_path = env::current_exe().expect("Failed to get current exe path");
     exe_path.pop(); // 移除exe文件名，保留目录
 

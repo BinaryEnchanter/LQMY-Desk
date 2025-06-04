@@ -15,6 +15,8 @@ use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSampl
 
 use ac_ffmpeg::codec::video::scaler::{Algorithm, VideoFrameScaler, VideoFrameScalerBuilder};
 
+use crate::log_println;
+
 /// 将 RawFrame（BGRA）转换为目标宽高、YUV420P 像素格式的 VideoFrame
 pub fn bgra_to_yuv420p_frame(
     raw_frame: &RawFrame,
@@ -219,7 +221,7 @@ impl MultiStreamManager {
                                 // 通道已关闭或满了，跳过这帧
                                 skip_counter += 1;
                                 if skip_counter % 30 == 0 {
-                                    println!(
+                                    log_println!(
                                         "Dropped {} frames due to channel congestion",
                                         skip_counter
                                     );
@@ -252,10 +254,10 @@ impl MultiStreamManager {
             old_worker.shutdown.store(true, Ordering::Relaxed);
             // 等待旧线程结束
             if let Err(e) = old_worker.handle.join() {
-                eprintln!("Error waiting for old encoder to finish: {:?}", e);
+                log_println!("Error waiting for old encoder to finish: {:?}", e);
             }
         }
-        println!("Adding new encoder for client: {}", client_uuid);
+        log_println!("Adding new encoder for client: {}", client_uuid);
         let shutdown = Arc::new(AtomicBool::new(false));
 
         // 使用std::thread::spawn创建独占线程
@@ -285,7 +287,7 @@ impl MultiStreamManager {
         let mut encoder = match Self::create_h264_encoder(&params) {
             Ok(e) => e,
             Err(e) => {
-                eprintln!("Failed to create encoder: {}", e);
+                log_println!("Failed to create encoder: {}", e);
                 return;
             }
         };
@@ -318,7 +320,7 @@ impl MultiStreamManager {
 
                             // // 每30帧打印一次状态，确认编码器在工作
                             // if frames_processed % 30 == 0 {
-                            //     println!("Processed {} frames", frames_processed);
+                            //     log_println!("Processed {} frames", frames_processed);
                             // }
 
                             if encoder.try_push(yuv_frame).is_ok() {
@@ -334,14 +336,14 @@ impl MultiStreamManager {
                                         })
                                         .await
                                     {
-                                        eprintln!("Failed to write sample: {:?}", err);
+                                        log_println!("Failed to write sample: {:?}", err);
                                         return;
                                     }
                                 }
                             }
                         }
                         Err(err) => {
-                            eprintln!("Failed to convert frame to YUV420P: {}", err);
+                            log_println!("Failed to convert frame to YUV420P: {}", err);
                             continue;
                         }
                     }
@@ -379,7 +381,7 @@ impl MultiStreamManager {
 
         for &encoder_name in &encoders {
             if let Ok(mut builder) = ac_ffmpeg::codec::video::VideoEncoder::builder(encoder_name) {
-                println!("Using encoder: {}", encoder_name);
+                log_println!("Using encoder: {}", encoder_name);
 
                 builder = builder
                     .pixel_format(output_pixel_format)
@@ -444,13 +446,14 @@ impl MultiStreamManager {
                 // 尝试构建编码器
                 match builder.build() {
                     Ok(encoder) => {
-                        println!("Successfully created {} encoder", encoder_name);
+                        log_println!("Successfully created {} encoder", encoder_name);
                         return Ok(encoder);
                     }
                     Err(e) => {
-                        println!(
+                        log_println!(
                             "Failed to create {} encoder: {}, trying next...",
-                            encoder_name, e
+                            encoder_name,
+                            e
                         );
                         continue;
                     }
@@ -470,15 +473,15 @@ impl MultiStreamManager {
             worker.shutdown.store(true, Ordering::Relaxed);
             // 等待线程结束
             if let Err(e) = worker.handle.join() {
-                eprintln!("Error waiting for encoder to finish: {:?}", e);
+                log_println!("Error waiting for encoder to finish: {:?}", e);
             }
         } else {
-            println!("[FFMPEG]关闭{:?}失败", client_uuid)
+            log_println!("[FFMPEG]关闭{:?}失败", client_uuid)
         }
         if encoders.is_empty() {
             drop(encoders);
             let res = self.stop_capture().await;
-            println!("[FFMPEG]无编码器工作，停止录屏");
+            log_println!("[FFMPEG]无编码器工作，停止录屏");
             return res;
         }
         Ok(())
