@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, RwLock};
+use winapi::shared::ws2ipdef::IN6_PKTINFO;
 
 use ac_ffmpeg::codec::video::frame::{PixelFormat, VideoFrame, VideoFrameMut};
 //use ac_ffmpeg::codec::video::{VideoEncoder, VideoFrameMut};
@@ -292,7 +293,9 @@ impl MultiStreamManager {
 
         let time_base = TimeBase::new(1, params.fps as i32);
         let mut frame_idx = 0i64;
-        //let mut frames_processed = 0i64;
+        let mut frames_processed = 0i64;
+        let mut frame_sent = 0i64;
+        let mut time = Instant::now();
         let frame_duration = Duration::from_millis(1000 / params.fps as u64);
 
         while !shutdown.load(Ordering::Relaxed) {
@@ -314,7 +317,7 @@ impl MultiStreamManager {
                     match bgra_to_yuv420p_frame(&raw_frame, &params, time_base, frame_idx) {
                         Ok(yuv_frame) => {
                             frame_idx += 1;
-                            // frames_processed += 1;
+                            frames_processed += 1;
 
                             // // 每30帧打印一次状态，确认编码器在工作
                             // if frames_processed % 30 == 0 {
@@ -338,6 +341,20 @@ impl MultiStreamManager {
                                         return;
                                     }
                                 }
+                                frame_sent += 1;
+
+                                // 每30帧打印一次状态，确认编码器在工作
+                                if Instant::now().duration_since(time) >= Duration::from_secs(1) {
+                                    println!(
+                                        "Processed {} frames,Send {} frames",
+                                        frames_processed, frame_sent
+                                    );
+                                    frame_sent = 0;
+                                    frames_processed = 0;
+                                    time = Instant::now();
+                                }
+                            } else {
+                                println!("[]fail to push to encoder")
                             }
                         }
                         Err(err) => {
@@ -375,7 +392,7 @@ impl MultiStreamManager {
             .map_err(|_| Error::new("Unknown pixel format 'yuv420p'".to_string()))?;
 
         // 按优先级尝试不同编码器
-        let encoders = ["h264_nvenc", "h264_amf", "h264_qsv", "libx264"];
+        let encoders = ["libx264", "h264_nvenc", "h264_amf", "h264_qsv"];
 
         for &encoder_name in &encoders {
             if let Ok(mut builder) = ac_ffmpeg::codec::video::VideoEncoder::builder(encoder_name) {
@@ -395,18 +412,23 @@ impl MultiStreamManager {
                         builder = builder
                             .set_option("preset", "fast") // p1-p7, fast等价于p4
                             .set_option("tune", "ll") // ll = low latency, 不是zerolatency
-                            .set_option("profile", "baseline") // baseline, main, high
+                            .set_option("profile", "high") // baseline, main, high
+                            .set_option("level", "52")
                             .set_option("rc", "cbr") // 码率控制：cbr, vbr, cqp
+                            //.set_option("cbr", "1")
                             .set_option("delay", "0") // 0延迟
                             .set_option("zerolatency", "1") // NVENC的零延迟模式
                             .set_option("b_frames", "0") // 禁用B帧
-                            .set_option("g", "30"); // GOP大小（关键帧间隔）
+                            .set_option("g", "60")
+                            .set_option("refs", "1") // GOP大小（关键帧间隔）
+                            .set_option("bufsize", "20000000") // bufsize = 20 Mbps（约=2×码率）
+                            .set_option("repeat-headers", "1"); // 每个关键帧重复输出 SPS/PPS
                     }
                     "h264_amf" => {
                         // AMD AMF 参数
                         builder = builder
                             .set_option("usage", "lowlatency") // 低延迟模式
-                            .set_option("profile", "baseline")
+                            .set_option("profile", "256")
                             .set_option("level", "auto")
                             .set_option("rc", "cbr") // 恒定码率
                             .set_option("enforce_hrd", "1") // 强制HRD兼容
@@ -425,18 +447,33 @@ impl MultiStreamManager {
                             .set_option("g", "30"); // GOP大小
                     }
                     "libx264" => {
-                        // CPU x264 参数（原来的设置）
+                        let keyint = std::cmp::min(params.fps * 2, 60); // 最多2秒，最少1秒
+                        let min_keyint = params.fps; // 最少1秒一个关键帧
+                                                     // CPU x264 参数（原来的设置）
                         builder = builder
-                            .set_option("preset", "ultrafast")
-                            .set_option("tune", "zerolatency")
-                            .set_option("profile", "baseline")
-                            .set_option("intra-refresh", "1")
-                            .set_option("rc-lookahead", "0")
-                            .set_option("sync-lookahead", "0")
-                            .set_option("sliced-threads", "1")
-                            .set_option("b-adapt", "0")
-                            .set_option("bframes", "0")
-                            .set_option("keyint", "30");
+                            // .set_option("preset", "ultrafast")
+                            // .set_option("tune", "zerolatency")
+                            // .set_option("profile", "baseline")
+                            // .set_option("intra-refresh", "1")
+                            // .set_option("rc-lookahead", "0")
+                            // .set_option("sync-lookahead", "0")
+                            // .set_option("sliced-threads", "1")
+                            // .set_option("b-adapt", "0")
+                            // .set_option("bframes", "0")
+                            // .set_option("keyint", "30");
+                            .set_option("preset", "ultrafast") // 🔥 必须：最快编码速度
+                            .set_option("tune", "zerolatency") // 🔥 必须：零延迟调优
+                            .set_option("profile", "baseline") // 🔥 必须：baseline profile
+                            // 帧结构 - 最简单的配置
+                            .set_option("bframes", "0") // 🔥 必须：禁用B帧
+                            .set_option("keyint", "25") // 🔥 关键：每25帧一个关键帧(1秒)
+                            .set_option("min-keyint", "25") // 🔥 关键：强制关键帧间隔
+                            // 延迟控制 - 只保留核心参数
+                            .set_option("rc-lookahead", "0") // 🔥 必须：禁用前瞻
+                            .set_option("sync-lookahead", "0") // 🔥 必须：禁用同步前瞻
+                            // 线程和切片 - 简化设置
+                            .set_option("sliced-threads", "1") // 🔥 重要：单线程切片
+                            .set_option("threads", "1") // 🔥 关键：单线程编码，避免竞争
                     }
                     _ => {}
                 }

@@ -94,10 +94,10 @@ async fn get_server_info(
 ) -> Result<(String, String, String, bool, CurUsersInfo), String> {
     let config = CONFIG.lock().await;
     let uuid = UUID.read().await.clone();
-    println!(
-        "[SERVER_INFO: Acquiring addr {:?} & password {:?} & uuid {:?}]",
-        config.server_address, config.connection_password, uuid
-    );
+    // println!(
+    //     "[SERVER_INFO: Acquiring addr {:?} & password {:?} & uuid {:?}]",
+    //     config.server_address, config.connection_password, uuid
+    // );
     //let cur_user = CURRENT_USER.lock().unwrap();
     let cur_users_info = CURRENT_USERS_INFO.read().await.clone();
     let is_running = state.is_running.load(Ordering::Relaxed).clone();
@@ -174,6 +174,7 @@ async fn main() {
     }
     let mut exe_path = env::current_exe().expect("Failed to get current exe path");
     exe_path.pop(); // 移除exe文件名，保留目录
+    exe_path.push("ffmpeg/bin");
 
     // 添加到 PATH 环境变量
     let path_env = env::var("PATH").unwrap_or_default();

@@ -18,8 +18,8 @@
         <div class="server-info">
             <h2>连接信息</h2>
             <p><strong>当前服务器IP 地址:</strong> {{ serverAddress || "未获取" }}</p>
-            <p><strong>连接口令:</strong> {{ connectionPassword || "无" }}</p>
             <p><strong>本机编号:</strong> {{ currentUuid }}</p>
+            <p><strong>连接口令:</strong> {{ connectionPassword || "无" }}</p>
             <button @click="fetchServerInfo">刷新服务器信息</button>
         </div>
 

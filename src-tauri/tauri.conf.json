@@ -32,12 +32,12 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": [
-        "ffmpeg/bin/avcodec-62.dll",
-        "ffmpeg/bin/avformat-62.dll",
-        "ffmpeg/bin/avutil-60.dll",
-        "ffmpeg/bin/swscale-9.dll",
-        "ffmpeg/bin/swresample-6.dll"
-      ]
+    "resources": {
+        "ffmpeg/bin/avcodec-62.dll": "avcodec-62.dll",
+        "ffmpeg/bin/avformat-62.dll": "avformat-62.dll",
+        "ffmpeg/bin/avutil-60.dll": "avutil-60.dll",
+        "ffmpeg/bin/swscale-9.dll": "swscale-9.dll",
+        "ffmpeg/bin/swresample-6.dll": "swresample-6.dll"
+      }
   }
 }

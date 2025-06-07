@@ -10,6 +10,7 @@ use futures_util::FutureExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::mpsc::{self, unbounded_channel};
+use webrtc::ice_transport::ice_credential_type::RTCIceCredentialType;
 
 use std::sync::Arc;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
@@ -76,13 +77,27 @@ pub async fn handle_webrtc_offer(offer: &JWTOfferRequest) -> AnswerResponse {
 
     // 2. 创建 PeerConnection
     let config = RTCConfiguration {
-        ice_servers: vec![RTCIceServer {
-            urls: vec![
-                "stun:stun.l.google.com:19302".into(),
-                "stun:stun.qq.com:3478".into(),
-            ],
-            ..Default::default()
-        }],
+        ice_servers: vec![
+            RTCIceServer {
+                urls: vec![
+                    "stun:stun.l.google.com:19302".into(),
+                    "stun:stun.qq.com:3478".into(),
+                ],
+                ..Default::default()
+            },
+            // Metered.ca TURN 服务器配置
+            RTCIceServer {
+                urls: vec![
+                    "turn:a.relay.metered.ca:80".to_owned(),
+                    "turn:a.relay.metered.ca:80?transport=tcp".to_owned(),
+                    "turn:a.relay.metered.ca:443".to_owned(),
+                    "turn:a.relay.metered.ca:443?transport=tcp".to_owned(),
+                ],
+                username: "a0999ebcb5073b9b1f7d80fc".to_owned(), // 替换为你的用户名
+                credential: "U0bKVWmLzwkHJ0fx".to_owned(),       // 替换为你的密码
+                credential_type: RTCIceCredentialType::Password,
+            },
+        ],
         ..Default::default()
     };
     //let pc = api.new_peer_connection(config).await?;
@@ -110,7 +125,7 @@ pub async fn handle_webrtc_offer(offer: &JWTOfferRequest) -> AnswerResponse {
     let video_track = Arc::new(TrackLocalStaticSample::new(
         RTCRtpCodecCapability {
             mime_type: "video/H264".into(),
-            sdp_fmtp_line: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"
+            sdp_fmtp_line: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42E02A"
                 .into(),
             clock_rate: 90000,
             rtcp_feedback: vec![
@@ -129,6 +144,10 @@ pub async fn handle_webrtc_offer(offer: &JWTOfferRequest) -> AnswerResponse {
                 RTCPFeedback {
                     typ: "ccm".to_owned(),
                     parameter: "fir".to_owned(),
+                },
+                RTCPFeedback {
+                    typ: "transport-cc".to_owned(), // 传输拥塞控制
+                    parameter: "".to_owned(),
                 },
             ],
             ..Default::default()
@@ -538,17 +557,17 @@ pub async fn close_peerconnection(client_uuid: &str) {
 fn select_mode(mode: &str, _client_uuid: &str) -> EncodingParams {
     let res = match mode {
         "high" => EncodingParams {
-            width: 2560,
-            height: 1440,
-            fps: 60,
-            bitrate: 20000000,
+            width: 1920,
+            height: 1080,
+            fps: 45,
+            bitrate: 10000000,
         },
 
         "low" => EncodingParams {
             width: 1920,
             height: 1080,
-            fps: 60,
-            bitrate: 10000000,
+            fps: 30,
+            bitrate: 5000000,
         },
         _ => EncodingParams {
             width: 1280,
