@@ -1,3 +1,61 @@
+/*
+================================================================================
+    WebRTC PeerConnection 管理模块
+
+    该模块负责桌面端 WebRTC 信令处理、PeerConnection 管理、ICE 交换、
+    视频推流与控制信令处理，主要包括以下功能：
+
+    处理客户端发起的 WebRTC Offer，创建对应的 PeerConnection，
+        配置 MediaEngine，注册视频 Track，设置 DataChannel 回调，
+        完成 SDP 协商，并启动视频流推送。
+
+    处理客户端发送的 ICE 候选（Candidate），支持候选缓冲与回放，
+        提供服务器主动返回本地 ICE 候选的接口。
+
+    优化 DataChannel 收发逻辑：
+        - 收到控制信令（鼠标、键盘操作）后进行批量解码与调度
+        - 对鼠标移动信令进行去重，提升性能
+        - 采用无阻塞通道处理 DataChannel 消息，防止事件循环卡死
+
+    管理 PeerConnection 生命周期：
+        - 监控 PeerConnection / ICE 连接状态
+        - 在连接关闭 / 断开时自动清理视频推流 Track，关闭 PeerConnection
+        - 提供外部调用接口 `close_peerconnection` 主动关闭指定用户连接
+
+    提供视频发送质量监控接口：
+        - 定期打印视频发送 RTP Stats，包括字节数、包数、编码帧数等指标
+
+    支持多客户端并发连接：
+        - 所有 PeerConnection 存储于全局 `PEER_CONNECTION` 哈希表中
+        - 支持按客户端 UUID 快速查找与操作 PeerConnection
+
+    主要对外接口：
+        - handle_webrtc_offer            → 处理客户端发来的 Offer 请求，返回 Answer
+        - handle_ice_candidate           → 处理客户端 ICE 候选
+        - flush_buffered_ice             → 新建 PeerConnection 后刷新缓冲的 ICE
+        - send_ice_candidate             → 服务器向客户端发送 ICE 候选
+        - close_peerconnection           → 主动关闭指定客户端的 PeerConnection
+        - monitor_video_send_stats       → 定时打印视频 RTP 发送状态（可选调用）
+
+    配套结构体：
+        - JWTOfferRequest
+        - AnswerResponse
+        - JWTCandidateRequest
+        - CandidateResponse
+
+    依赖全局组件：
+        - PEER_CONNECTION                → 存储所有 PeerConnection
+        - ICE_BUFFER                     → 缓冲尚未关联到 PC 的 ICE 候选
+        - GLOBAL_STREAM_MANAGER          → 视频流推送管理器
+        - UUID, PENDING, SEND_NOTIFY     → 信令回传 / 通知机制
+
+    注意事项：
+        - DataChannel 收到的控制消息已做缓存、批处理、去重优化，避免高频控制导致性能下降
+        - 支持 TURN/STUN 服务器配置，兼容 NAT 穿透
+        - 本模块为高并发设计，DataChannel 回调、状态回调均通过 tokio::spawn 派发异步任务
+================================================================================
+*/
+
 use crate::client::{PENDING, SEND_NOTIFY};
 use crate::client_utils::current_user::{ControlMessage, ControllerCache};
 use crate::config::{CURRENT_USERS_INFO, GLOBAL_STREAM_MANAGER, ICE_BUFFER, PEER_CONNECTION, UUID};

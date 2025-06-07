@@ -1,3 +1,51 @@
+//! ffmpeg.rs
+//!
+//! # 模块功能概述
+//!
+//! `MultiStreamManager` —— 多路视频编码与 WebRTC 推送模块
+//!
+//! 本模块负责将 **桌面采集模块（rusty_duplication）** 提供的原始帧 `RawFrame`，
+/// 通过配置好的 **编码器（FFmpeg ac-ffmpeg）**，
+/// 实时编码为 H264/VP8 视频帧，
+/// 并通过 **WebRTC Track** 推送给多个客户端（TrackLocalStaticSample）
+///
+/// 由于 WebRTC 的 Track 接口需要 "静态 Push"，而桌面帧率较高且不稳定，
+/// 本模块内部使用 **异步任务轮询** + **速率限制** + **流独立状态管理**
+/// 来保证：
+/// - 每路 Stream 独立编码，不阻塞主线程
+/// - 每路 Stream 可动态添加/移除
+/// - 编码速率可调（支持手动降帧）
+///
+/// ## 核心流程
+///
+/// ```text
+/// RawFrame (BGRA) --bgra_to_yuv420p_frame--> YUV420P Frame --FFmpeg Encoder--> Encoded Packet
+/// → 通过 WebRTC Track (TrackLocalStaticSample) 发送
+/// ```
+///
+/// ## 模块提供功能
+/// - `MultiStreamManager::new` 创建多路流管理器
+/// - `add_stream(track, params)` 添加新编码推流任务
+/// - `remove_stream(track_id)` 移除推流任务
+/// - 内部自动管理编码器生命周期，处理速率限制
+///
+/// ## 典型用法
+/// ```rust
+/// let manager = Arc::new(MultiStreamManager::new(time_base));
+/// manager.add_stream(track, params).await?;
+/// manager.push_frame(raw_frame.clone());
+/// ```
+///
+/// ## 注意事项
+/// - `push_frame` 不直接推流，仅负责更新最新 RawFrame
+/// - 推流由每路 Task 自行拉取最新帧 → 避免高频线程竞争
+///
+/// ##
+/// 多 Track 独立 Task，互不干扰
+/// 使用 `AtomicU64` + `Arc<RwLock<RawFrame>>` 实现最新帧共享
+/// 内置速率控制，自动降帧避免编码积压
+/// 可热插拔流 Track，平滑移除
+///
 use ac_ffmpeg::codec::Encoder;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -5,7 +53,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, RwLock};
-use winapi::shared::ws2ipdef::IN6_PKTINFO;
 
 use ac_ffmpeg::codec::video::frame::{PixelFormat, VideoFrame, VideoFrameMut};
 //use ac_ffmpeg::codec::video::{VideoEncoder, VideoFrameMut};
@@ -116,6 +163,17 @@ struct EncoderWorker {
     shutdown: Arc<AtomicBool>,
 }
 
+/// 多路编码推流管理器
+///
+/// 内部管理多个 "编码+推流 Task"，
+/// 每个 Track 对应一个独立任务，互不影响。
+///
+/// 外部调用 `push_frame` 更新最新原始帧，
+/// 每个任务按自身速率拉取该帧，进行编码推送。
+///
+/// 使用场景:
+/// - 支持多客户端同时观看桌面流
+/// - 支持不同 Track 使用不同编码参数（分辨率、码率）
 pub struct MultiStreamManager {
     capture_handle: Option<std::thread::JoinHandle<()>>, // 改为std::thread::JoinHandle
     capture_shutdown: Arc<AtomicBool>,
@@ -447,9 +505,9 @@ impl MultiStreamManager {
                             .set_option("g", "30"); // GOP大小
                     }
                     "libx264" => {
-                        let keyint = std::cmp::min(params.fps * 2, 60); // 最多2秒，最少1秒
-                        let min_keyint = params.fps; // 最少1秒一个关键帧
-                                                     // CPU x264 参数（原来的设置）
+                        let _keyint = std::cmp::min(params.fps * 2, 60); // 最多2秒，最少1秒
+                        let _min_keyint = params.fps; // 最少1秒一个关键帧
+                                                      // CPU x264 参数（原来的设置）
                         builder = builder
                             // .set_option("preset", "ultrafast")
                             // .set_option("tune", "zerolatency")

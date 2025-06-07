@@ -1,5 +1,26 @@
+// =====================================================
+// main.rs
+// LQMY-Desk 客户端桌面端主程序入口
+//
+// 功能职责：
+// - 初始化 Tauri 应用
+// - 提供对 Vue 前端的 RPC 接口 (tauri::command)
+// - 管理 WebRTC 信令、PeerConnection 连接
+// - 管理用户信息、用户状态
+// - 管理全局捕获（视频流捕获、关闭流程）
+// - 优雅关闭支持 (窗口关闭时清理资源)
+//
+// 依赖模块：
+// - client：WebSocket 客户端逻辑
+// - client_utils：用户管理、断连管理
+// - config：全局配置与全局状态
+// - video_capturer：视频采集模块
+// - webrtc：WebRTC 相关处理
+// =====================================================
+
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod client;
 mod client_utils;
 mod config;
@@ -8,6 +29,7 @@ mod config;
 mod input_executor;
 mod video_capturer;
 mod webrtc;
+
 use std::{
     env,
     sync::{
@@ -28,14 +50,13 @@ use webrtc::webrtc_connect::close_peerconnection;
 
 use crate::config::APPDATA_PATH;
 
-//use actix_web::{web, App, HttpServer, HttpResponse};
-//use tauri::Manager;
-
+/// 应用状态管理结构体（用于跨命令共享运行状态）
 pub struct AppState {
     pub is_running: Arc<AtomicBool>,
     pub exit_flag: Arc<AtomicBool>,
 }
 
+/// 启动客户端 WebSocket 连接 & 信令逻辑
 #[tauri::command]
 async fn start_server(state: tauri::State<'_, AppState>) -> Result<(), String> {
     let is_running = state.is_running.clone();
@@ -65,6 +86,7 @@ async fn start_server(state: tauri::State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+/// 停止客户端连接，关闭 WebSocket 信令，清理 PeerConnection
 #[tauri::command]
 async fn stop_server(state: tauri::State<'_, AppState>) -> Result<(), String> {
     // 先执行异步关闭
@@ -79,6 +101,7 @@ async fn stop_server(state: tauri::State<'_, AppState>) -> Result<(), String> {
         state.exit_flag
     );
 
+    // 通知 client 主循环退出
     CLOSE_NOTIFY.notify_one();
 
     // 重置全局信息
@@ -88,65 +111,71 @@ async fn stop_server(state: tauri::State<'_, AppState>) -> Result<(), String> {
 
     Ok(())
 }
+
+/// 获取服务器配置信息，供前端显示
 #[tauri::command]
 async fn get_server_info(
     state: tauri::State<'_, AppState>,
 ) -> Result<(String, String, String, bool, CurUsersInfo), String> {
     let config = CONFIG.lock().await;
     let uuid = UUID.read().await.clone();
-    // println!(
-    //     "[SERVER_INFO: Acquiring addr {:?} & password {:?} & uuid {:?}]",
-    //     config.server_address, config.connection_password, uuid
-    // );
-    //let cur_user = CURRENT_USER.lock().unwrap();
     let cur_users_info = CURRENT_USERS_INFO.read().await.clone();
     let is_running = state.is_running.load(Ordering::Relaxed).clone();
     Ok((
         config.server_address.clone(),
         config.connection_password.clone(),
-        // cur_user.device_name.clone(),
-        // cur_user.device_id.clone(),
-        // format!("{:?}", cur_user.user_type),
         uuid.clone(),
         is_running,
         cur_users_info,
     ))
 }
 
+/// 获取当前所有用户信息（转换为前端可用格式）
 #[tauri::command]
 async fn get_user_info() -> Vec<UserInfoString> {
     let vec = transfer_userinfo_to_vue().await;
     println!("[USER LIST]传到VUE的用户信息为{:?}", vec);
     vec
 }
+
+/// 更新指定用户的用户类型
 #[tauri::command]
 async fn update_user_type(serial: String, usertype: String) {
     update_user_category(serial, usertype).await;
 }
+
+/// 删除指定用户信息
 #[tauri::command]
 async fn delete_userinfo(serial: String) {
     delete_user(serial).await
 }
 
+/// 更新服务器地址配置
 #[tauri::command]
 async fn update_server_addr(ipaddr: String) {
     config::update_server_addr(ipaddr).await
 }
 
+/// 断开指定 uuid 的用户连接
 #[tauri::command]
 async fn disconnect_by_uuid(uuid: String) {
     close_peerconnection(&uuid).await;
     disconnect_cur_user_by_uuid(&uuid).await;
 }
+
+/// 后端窗口关闭回调处理（主动调用全局关闭）
 #[tauri::command]
 async fn backend_close_handler() {
     shutdown_caputure().await
 }
+
+/// 撤销控制权，通知对应用户
 #[tauri::command]
-/// 撤销控制，会向对方发消息
 async fn revoke_control() {
     CURRENT_USERS_INFO.write().await.revoke_control().await;
 }
+
+/// 全局关闭视频捕获流程，断开所有 PeerConnection
 #[tauri::command]
 async fn shutdown_caputure() {
     let cur_users = CURRENT_USERS_INFO.read().await.usersinfo.clone();
@@ -155,15 +184,19 @@ async fn shutdown_caputure() {
         disconnect_cur_user_by_uuid(&curinfo.uuid).await;
     }
     drop(cur_users);
-    //GLOBAL_STREAM_MANAGER.write().await.shutdown().await;
+    // GLOBAL_STREAM_MANAGER.write().await.shutdown().await; // 若需要可启用
     CURRENT_USERS_INFO.write().await.reset();
     println!("[SERVER]关闭捕获，全部用户断开")
 }
 
+/// 关闭流程是否已被调用（防止重复调用）
 static SHUTDOWN_CALLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+// 这个编译宏可能会在 rust-analyzer的激进检错中显示语法错误，但是不影响 cargo 编译，所以可以忽略
+/// 主程序入口
 #[tokio::main(flavor = "multi_thread", worker_threads = 16)]
 async fn main() {
+    // 初始化日志输出文件
     let path = APPDATA_PATH.lock().unwrap().join("output.txt");
     let file = File::create(path).unwrap();
 
@@ -172,34 +205,32 @@ async fn main() {
         use std::os::windows::io::AsRawHandle;
         use std::process::Command;
     }
+
+    // 添加 ffmpeg/bin 到 PATH，方便 ffmpeg 调用
     let mut exe_path = env::current_exe().expect("Failed to get current exe path");
     exe_path.pop(); // 移除exe文件名，保留目录
     exe_path.push("ffmpeg/bin");
 
-    // 添加到 PATH 环境变量
     let path_env = env::var("PATH").unwrap_or_default();
     let new_path = format!("{};{}", exe_path.display(), path_env);
     env::set_var("PATH", new_path);
+
+    // 初始化 Tauri 应用
     tauri::Builder::default()
         .on_window_event(|_window, event| {
             match event {
                 tauri::WindowEvent::CloseRequested { api, .. } => {
-                    // 检查是否已经调用过shutdown
+                    // 防止多次调用 shutdown
                     if SHUTDOWN_CALLED.load(std::sync::atomic::Ordering::Relaxed) {
-                        return; // 如果已经调用过，直接返回让窗口正常关闭
+                        return;
                     }
 
-                    // 阻止默认关闭
                     api.prevent_close();
 
-                    // 设置标志，防止重复调用
                     SHUTDOWN_CALLED.store(true, std::sync::atomic::Ordering::Relaxed);
 
-                    // 异步执行cleanup
-                    //let window_clone = window.clone();
                     tauri::async_runtime::spawn(async move {
                         shutdown_caputure().await;
-                        // cleanup完成后退出程序
                         std::process::exit(0);
                     });
                 }

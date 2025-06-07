@@ -1,4 +1,13 @@
-use enigo::{Axis, Button, Coordinate, Direction, Enigo, Key, Keyboard, Mouse, Settings};
+//! =======================================================
+//! 文件名: input.rs
+//! 模块功能:
+//!     - 解析并执行操作
+//! 作者: 屈铭
+//! 日期: 2025-05.23
+//!
+//! =======================================================
+
+use enigo::{Button, Coordinate, Direction, Enigo, Key, Keyboard, Mouse, Settings};
 use serde_json::Value;
 
 // 将字符串形式的“按键名”映射到 enigo::Key 枚举。

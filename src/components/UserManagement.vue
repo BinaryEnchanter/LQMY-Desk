@@ -1,4 +1,19 @@
-<template>
+<!-- 
+=======================================================
+文件名：UserManagement.vue
+描述：用户管理界面
+功能：
+    - 显示当前用户列表（设备名、序列号、用户类别）
+    - 支持搜索过滤用户
+    - 支持更改用户类别
+    - 支持删除用户
+作者：李昶毅
+创建时间：2025-04-20
+依赖：
+    - Vue 3 Composition API
+    - Tauri invoke API
+=======================================================
+--><template>
     <div>
         <h1>用户管理</h1>
         <input type="text" v-model="searchQuery" placeholder="搜索设备名或序列号..." />
@@ -42,33 +57,59 @@ import { invoke } from "@tauri-apps/api/core";
 
 export default {
     setup() {
+        // === 数据定义 ===
+
+        // 用户列表
         const users = ref([]);
+
+        // 搜索框内容
         const searchQuery = ref("");
 
-        const editingUserId = ref(null); // 正在编辑的 user.device_id
+        // 当前正在编辑类别的用户 device_id
+        const editingUserId = ref(null);
 
+        // 用户类别对应中文标签
         const userTypeLabels = {
             trusted: "可信",
             regular: "普通",
             blacklist: "黑名单"
         };
 
+        /**
+         * 将用户类别英文映射为中文显示
+         * @param {string} type - 用户类别英文标识
+         * @returns {string} 中文标签
+         */
         const formatUserType = (type) => {
             return userTypeLabels[type] || "未知";
         };
 
+        /**
+         * 获取除当前类别外的可选类别列表
+         * @param {string} currentType - 当前用户类别
+         * @returns {string[]} 可选类别数组
+         */
         const availableCategories = (currentType) => {
             return Object.keys(userTypeLabels).filter((t) => t !== currentType);
         };
 
+        /**
+         * 启动编辑某个用户类别
+         * @param {string} deviceId - 设备序列号
+         */
         function startEditing(deviceId) {
             editingUserId.value = deviceId;
         }
 
+        /**
+         * 用户选择新类别后提交更新
+         * @param {Object} user - 用户对象
+         * @param {Event} event - change 事件
+         */
         async function selectCategory(user, event) {
             const newType = event.target.value;
             if (!newType || newType === user.user_type) {
-                return; // 未选择或没变更就不处理
+                return; // 未选择或未更改
             }
 
             try {
@@ -84,7 +125,9 @@ export default {
             }
         }
 
-
+        /**
+         * 过滤用户列表，支持按设备名/序列号搜索
+         */
         const filteredUsers = computed(() => {
             const query = searchQuery.value.trim().toLowerCase();
             if (!query) return users.value;
@@ -96,6 +139,9 @@ export default {
             });
         });
 
+        /**
+         * 获取用户列表（调用后端接口）
+         */
         async function fetchUsers() {
             try {
                 users.value = await invoke("get_user_info");
@@ -105,6 +151,10 @@ export default {
             }
         }
 
+        /**
+         * 更新用户类别（备用函数，当前未直接使用）
+         * @param {Object} user - 用户对象
+         */
         async function updateUser(user) {
             try {
                 await invoke("update_user_type", { serial: user.device_id, category: user.user_type });
@@ -114,6 +164,10 @@ export default {
             }
         }
 
+        /**
+         * 删除用户
+         * @param {string} serial - 用户设备序列号
+         */
         async function deleteUser(serial) {
             if (confirm("确定删除该用户？")) {
                 try {
@@ -125,13 +179,24 @@ export default {
             }
         }
 
+        // === 生命周期钩子 ===
+
+        /**
+         * 组件挂载时自动拉取用户列表
+         */
         onMounted(fetchUsers);
 
+        // === 返回模板绑定的数据与方法 ===
         return {
-            searchQuery, filteredUsers, updateUser, deleteUser, editingUserId,
+            searchQuery,
+            filteredUsers,
+            updateUser,
+            deleteUser,
+            editingUserId,
             formatUserType,
             availableCategories,
-            startEditing, selectCategory,
+            startEditing,
+            selectCategory,
         };
     }
 };

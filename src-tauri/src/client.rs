@@ -1,3 +1,43 @@
+//! WebSocket 客户端模块（桌面端）
+//!
+//! # 主要功能
+//!
+//! - 作为桌面客户端，连接 WebSocket 信令服务器（支持 ws:// 和 wss://）
+//! - 注册自身为 desktop 端，维护 UUID 状态
+//! - 定时发送心跳（ping），检测服务器响应（pong）
+//! - 自动处理服务器主动断连和超时断连
+//! - 接收和处理服务器下发的业务消息，包括：
+//!   - `auth` 认证请求，返回认证结果
+//!   - WebRTC 信令交换（`offer` / `candidate` / `closertc`）
+//!   - `control` 控制权申请
+//!   - `revokectrl` 撤销控制权
+//!   - `disconnect` 控制端断开请求
+//! - 支持主动发送消息（PENDING 列表 + SEND_NOTIFY 通知机制）
+//! - 支持优雅退出（CLOSE_NOTIFY 通知机制）
+//!
+//! # 内部架构
+//!
+//! - 使用 tokio 异步循环 + select 处理：发送、接收、定时心跳、退出
+//! - 发送采用 PENDING 全局队列，线程安全互斥访问，发送完成后释放锁
+//! - 收到业务消息时，根据 `cmd` 字段分派到不同的异步任务处理
+//! - 使用 `lazy_static` 定义全局 Notify / Mutex 资源，简化任务同步
+//! - 部分依赖的模块：
+//!   - `auth` 认证模块
+//!   - `current_user` 当前用户管理
+//!   - `dialog` UI 弹窗提示
+//!   - `disconnect` 断开控制请求处理
+//!   - `password` 连接密码生成
+//!   - `webrtc_connect` WebRTC 连接管理（offer / candidate / close）
+//!
+//! # 注意事项
+//!
+//! - 注册成功（register_ack）后开启心跳，超时（6s无pong）触发断连提示
+//! - 业务消息需严格校验 JWT 签名
+//! - 通过全局状态维护当前连接状态、控制权状态
+//! - 收到 Frame::Close 后主动退出
+//! - 可以通过 CLOSE_NOTIFY 通知主动退出
+//! - 通过 SEND_NOTIFY + PENDING 实现线程安全的异步消息发送
+//!
 use std::{
     sync::{atomic::AtomicBool, Arc, Mutex},
     time::Instant,

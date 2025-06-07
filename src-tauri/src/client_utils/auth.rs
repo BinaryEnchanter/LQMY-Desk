@@ -1,3 +1,17 @@
+//! 认证授权模块
+//!
+//! 该模块提供设备连接认证和JWT令牌生成/验证功能
+//! 主要功能包括：
+//! - 处理设备连接请求并进行认证
+//! - 根据用户类型(黑名单/信任/普通/新用户)采取不同认证策略
+//! - 生成和验证JWT令牌
+//! - 管理当前连接用户信息
+//!
+//! 作者: 李昶毅
+//！ 4.8    创建，HTTP url /auth
+//！ 4.16   用户管理、jwt
+//！ 5.19   更替为Websocket接口
+//！ 53.20  bug fix
 use super::current_user::CurInfo;
 use super::dialog::show_confirmation_dialog;
 use super::user_manager::UserType;
