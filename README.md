@@ -1,7 +1,44 @@
-# Tauri + Vue 3
+# LQMY 远程控制桌面系统
+这里是LQMY系统的桌面端代码仓库，同时也是 手机端和桌面端RELEASE仓库
 
-This template should help get you started developing with Tauri + Vue 3 in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
+## 安装与使用
+仓库的RELEASE界面可以下载安装包
 
-## Recommended IDE Setup
+安装
+- 电脑端：安装包下载后打开，选择安装位置，然后安装即可使用
+- 手机端：apk于安卓手机直接下载安装使用
 
-- [VS Code](https://code.visualstudio.com/) + [Volar](https://marketplace.visualstudio.com/items?itemName=Vue.volar) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+使用
+- 电脑端：
+  - 服务器状态界面：
+      - 左侧边栏：更换信令服务器（本项目已经配置好WebSocket服务器和WebRTC TURN中继服务器，2025-7前可免费使用，所以无需更改）；
+                 启动/关闭服务，这将使软件同服务器建立连接，建立连接后才能收到连接请求和你的编号
+      - 右侧边栏： 显示连接信息，启动连接后，你需要将你的编号和口令告知手机端
+      - 下册边栏： 显示当前连接用户的信息
+                  允许你断开用户的连接和撤销控制权
+        ![image](https://github.com/user-attachments/assets/1102ce9d-eac8-4f15-a705-fa61f0b480eb)
+
+  - 用户管理界面：
+      - 记录信息：连接成功过的用户信息会被永久存储在本地
+      - 用户类别：`信任`用户无需电脑确认即可链接；`普通`或者初次连接的用户需要确认才可以连接；`黑名单`用户直接被拒绝连接
+      - 用户信息检索、删除、更改用户类别       
+        ![image](https://github.com/user-attachments/assets/5e3ff709-daf1-4b4c-9b55-c09b0474bf96)
+- 手机端：
+  - 连接界面：输入要连接的电脑编号和口令
+    ![Screenshot_2025-06-05-08-02-24-790_com example pr](https://github.com/user-attachments/assets/5e3a5201-ab65-4f62-a4c8-02a11c785c18)
+  - 选择模式界面：选择画质要求
+    ![Screenshot_2025-06-05-08-02-20-221_com example pr](https://github.com/user-attachments/assets/641d06f5-66ad-4c4a-9c2e-6b792e8647bf)
+
+  - 视频显示界面：
+      - 显示传输的画面
+      - 右侧边栏（向左滑动显示）：额外功能
+        - 呼出键盘：模拟电脑全键键盘，支持组合键
+        - 申请控制：只用拥有控制权的用户才能控制电脑
+        - 输入设置：可以自定义按键布局
+          ![Screenshot_2025-06-05-08-02-09-723_com example pr](https://github.com/user-attachments/assets/d33870d0-84a9-4cad-bac3-8e64668a63d3)
+        - 帮助：显示操作提示
+## 使用说明
+  - 由于使用的是国外免费TURN中继服务器，延迟在200ms，原本不打算加TURN，但是为了稳定性，选择加TURN。
+  - TURN服务器加入影响连接时间，连接时间大概5s，稳定时间大概10s
+  - 请确保手机端和电脑端所处网络允许打洞，否则会链接会被路由的防火墙阻挡
+        
